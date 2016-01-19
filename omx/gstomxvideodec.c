@@ -44,7 +44,8 @@
 
 #if (defined (USE_OMX_TARGET_RPI) || defined (USE_OMX_TARGET_TEGRA)) && defined (HAVE_GST_GL)
 #include <gst/gl/gl.h>
-#include <gst/gl/egl/gsteglimagememory.h>
+#include <gst/gl/egl/gstglmemoryegl.h>
+#include <gst/gl/egl/gstglcontext_egl.h>
 #endif
 
 #if defined (USE_OMX_TARGET_RPI) && defined(__GNUC__)
@@ -954,8 +955,8 @@ gst_omx_video_dec_class_init (GstOMXVideoDecClass * klass)
       "height = " GST_VIDEO_SIZE_RANGE ", " "framerate = " GST_VIDEO_FPS_RANGE ";"
 #endif
 #if (defined (USE_OMX_TARGET_RPI) || defined (USE_OMX_TARGET_TEGRA)) && defined (HAVE_GST_GL)
-      GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_EGL_IMAGE,
-      "RGBA") "; "
+      GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GL_MEMORY,
+      "RGBA") ", texture-target=2D " "; "
 #endif
       "video/x-raw, "
       "width = " GST_VIDEO_SIZE_RANGE ", "
@@ -1573,8 +1574,12 @@ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
         GST_BUFFER_POOL_OPTION_VIDEO_META);
 
 #if (defined (USE_OMX_TARGET_RPI) || defined (USE_OMX_TARGET_TEGRA)) && defined (HAVE_GST_GL)
-    eglimage = self->eglimage && (allocator
-        && g_strcmp0 (allocator->mem_type, GST_EGL_IMAGE_MEMORY_TYPE) == 0);
+    eglimage = self->eglimage
+        && ((allocator && GST_IS_GL_MEMORY_EGL_ALLOCATOR (allocator))
+            || (pool && GST_IS_GL_BUFFER_POOL (pool)));
+#else
+    /* TODO: Implement something that works for other targets too */
+    eglimage = FALSE;
 #endif
 
 #if defined (USE_OMX_TARGET_TEGRA)
@@ -1622,12 +1627,12 @@ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
     for (i = 0; i < min; i++) {
       GstBuffer *buffer;
       GstMemory *mem;
+      GstGLMemoryEGL *gl_mem;
 
       if (gst_buffer_pool_acquire_buffer (pool, &buffer, &params) != GST_FLOW_OK
           || gst_buffer_n_memory (buffer) != 1
           || !(mem = gst_buffer_peek_memory (buffer, 0))
-          || g_strcmp0 (mem->allocator->mem_type,
-              GST_EGL_IMAGE_MEMORY_TYPE) != 0) {
+          || !GST_IS_GL_MEMORY_EGL_ALLOCATOR (mem->allocator)) {
         GST_INFO_OBJECT (self, "Failed to allocated %d-th EGLImage", i);
         g_list_free_full (buffers, (GDestroyNotify) gst_buffer_unref);
         g_list_free (images);
@@ -1638,13 +1643,14 @@ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
         err = OMX_ErrorUndefined;
         goto done;
       }
-
+      gl_mem = (GstGLMemoryEGL *) mem;
       buffers = g_list_append (buffers, buffer);
-      gst_egl_image_memory_set_orientation (mem,
-          GST_VIDEO_GL_TEXTURE_ORIENTATION_X_NORMAL_Y_FLIP);
-      images = g_list_append (images, gst_egl_image_memory_get_image (mem));
+      /* FIXME: replace with the affine transformation meta */
+/*      gl_mem->image->orientation =
+          GST_VIDEO_GL_TEXTURE_ORIENTATION_X_NORMAL_Y_FLIP;*/
+      images = g_list_append (images, gst_gl_memory_egl_get_image (gl_mem));
       if (egl_display == EGL_NO_DISPLAY)
-        egl_display = gst_egl_image_memory_get_display (mem);
+        egl_display = gst_gl_memory_egl_get_display (gl_mem);
     }
 
     GST_DEBUG_OBJECT (self, "Allocated %d EGLImages successfully", min);
@@ -1758,8 +1764,7 @@ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
         if (gst_buffer_pool_acquire_buffer (pool, &buffer,
                 &params) != GST_FLOW_OK || gst_buffer_n_memory (buffer) != 1
             || !(mem = gst_buffer_peek_memory (buffer, 0))
-            || g_strcmp0 (mem->allocator->mem_type,
-                GST_EGL_IMAGE_MEMORY_TYPE) != 0) {
+            || !GST_IS_GL_MEMORY_EGL_ALLOCATOR (mem->allocator)) {
           GST_INFO_OBJECT (self, "Failed to allocated %d-th EGLImage", i);
           g_list_free_full (buffers, (GDestroyNotify) gst_buffer_unref);
           g_list_free (images);
@@ -1770,9 +1775,10 @@ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
         }
 
         buffers = g_list_append (buffers, buffer);
-        gst_egl_image_memory_set_orientation (mem,
-            GST_VIDEO_GL_TEXTURE_ORIENTATION_X_NORMAL_Y_FLIP);
-        images = g_list_append (images, gst_egl_image_memory_get_image (mem));
+      /* FIXME: replace with the affine transformation meta */
+/*      gl_mem->image->orientation =
+          GST_VIDEO_GL_TEXTURE_ORIENTATION_X_NORMAL_Y_FLIP;*/
+        images = g_list_append (images, gst_gl_memory_egl_get_image ((GstGLMemoryEGL *) mem));
       }
 
       GST_DEBUG_OBJECT (self, "Allocated %d EGLImages successfully", min);
@@ -2076,10 +2082,10 @@ gst_omx_video_dec_negotiate_nv_caps (GstOMXVideoDec * self,
       GstCapsFeatures *feature;
       feature = gst_caps_get_features (icaps, n);
 
-      if (gst_caps_features_contains (feature, "memory:EGLImage")) {
+      if (gst_caps_features_contains (feature, "memory:GLMemory")) {
         gst_caps_unref (icaps);
         gst_object_unref (peer);
-        GST_DEBUG_OBJECT (self, "Setting decoder to send out EGLImage");
+        GST_DEBUG_OBJECT (self, "Setting decoder to send out GLMemory");
         return BUF_EGL;
       } else if (gst_caps_features_contains (feature, "memory:NVMM")) {
 
@@ -2163,14 +2169,14 @@ gst_omx_video_dec_reconfigure_output_port (GstOMXVideoDec * self)
         gst_caps_unref (state->caps);
       state->caps = gst_video_info_to_caps (&state->info);
       gst_caps_set_features (state->caps, 0,
-          gst_caps_features_new (GST_CAPS_FEATURE_MEMORY_EGL_IMAGE, NULL));
+          gst_caps_features_new (GST_CAPS_FEATURE_MEMORY_GL_MEMORY, NULL));
 
       /* try to negotiate with caps feature */
       if (!gst_video_decoder_negotiate (GST_VIDEO_DECODER (self))) {
 
         GST_DEBUG_OBJECT (self,
             "Failed to negotiate with feature %s",
-            GST_CAPS_FEATURE_MEMORY_EGL_IMAGE);
+            GST_CAPS_FEATURE_MEMORY_GL_MEMORY);
 
         if (state->caps)
           gst_caps_replace (&state->caps, NULL);
@@ -2429,58 +2435,37 @@ gst_omx_video_dec_reconfigure_output_port (GstOMXVideoDec * self)
 
 #if defined (USE_OMX_TARGET_TEGRA)
   {
-    state->caps = gst_video_info_to_caps (&state->info);
-    features = gst_caps_features_new ("memory:NVMM", NULL);
-    gst_caps_set_features (state->caps, 0, features);
-    if (!gst_video_decoder_negotiate (GST_VIDEO_DECODER (self))) {
-      GST_DEBUG_OBJECT (self, "Failed to negotiate with NVMM caps, trying RAW");
-      gst_caps_unref (state->caps);
-      state->caps = NULL;
-    }
     nv_buf = gst_omx_video_dec_negotiate_nv_caps (self, state);
-    if (nv_buf != BUF_NVMM) {
-      GST_DEBUG_OBJECT (self, "Downstream element does not support NVMM explicitly, try RAW");
-      gst_caps_unref (state->caps);
-      state->caps = NULL;
+    if (nv_buf == BUF_NVMM) {
+      state->caps = gst_video_info_to_caps (&state->info);
+      features = gst_caps_features_new ("memory:NVMM", NULL);
+      gst_caps_set_features (state->caps, 0, features);
+      if (!gst_video_decoder_negotiate (GST_VIDEO_DECODER (self))) {
+        GST_DEBUG_OBJECT (self, "Failed to negotiate with NVMM caps, trying RAW");
+        gst_caps_unref (state->caps);
+        state->caps = NULL;
+        nv_buf = BUF_NB;
+      }
     }
-  }
-#endif
-
-#if defined (USE_OMX_TARGET_TEGRA) && defined (HAVE_GST_GL)
-  {
-    nv_buf = gst_omx_video_dec_negotiate_nv_caps (self, state);
+#if defined (HAVE_GST_GL)
     if (nv_buf == BUF_EGL) {
       state = gst_video_decoder_set_output_state (GST_VIDEO_DECODER (self),
           GST_VIDEO_FORMAT_RGBA, port_def.format.video.nFrameWidth,
           port_def.format.video.nFrameHeight, self->input_state);
-
-      /* at this point state->caps is NULL */
-      if (state->caps)
-        gst_caps_unref (state->caps);
       state->caps = gst_video_info_to_caps (&state->info);
-      gst_caps_set_features (state->caps, 0,
-          gst_caps_features_new (GST_CAPS_FEATURE_MEMORY_EGL_IMAGE, NULL));
+      features = gst_caps_features_new ("memory:GLMemory", NULL);
+      gst_caps_set_features (state->caps, 0, features);
 
-      self->eglimage = FALSE;
       if (gst_video_decoder_negotiate (GST_VIDEO_DECODER (self))) {
         self->eglimage = TRUE;
       } else {
-        GST_DEBUG_OBJECT (self,
-            "Failed to negotiate with feature %s",
-            GST_CAPS_FEATURE_MEMORY_EGL_IMAGE);
-
-        if (state->caps)
-          gst_caps_replace (&state->caps, NULL);
-
-        /* fallback: try to use EGLImage even if it is not in the caps feature */
-        if (gst_video_decoder_negotiate (GST_VIDEO_DECODER (self))) {
-          self->eglimage = TRUE;
-        }
+        GST_ERROR_OBJECT (self, "Failed to negotiate RGBA for GLMemory");
+        self->eglimage = FALSE;
       }
-
-      if (!self->eglimage)
-        GST_ERROR_OBJECT (self, "Failed to negotiate RGBA for EGLImage");
     }
+#else
+    self->eglimage = FALSE;
+#endif
 
     if (nv_buf == BUF_NB) {
         self->cpu_dec_buf = TRUE;
@@ -3952,8 +3937,7 @@ gst_omx_video_dec_decide_allocation (GstVideoDecoder * bdec, GstQuery * query)
 
         gst_query_parse_nth_allocation_param (query, i, &allocator, &params);
         if (allocator
-            && g_strcmp0 (allocator->mem_type,
-                GST_EGL_IMAGE_MEMORY_TYPE) == 0) {
+            && GST_IS_GL_MEMORY_EGL_ALLOCATOR (allocator)) {
           found = TRUE;
           gst_query_set_nth_allocation_param (query, 0, allocator, &params);
           while (gst_query_get_n_allocation_params (query) > 1)
@@ -3962,11 +3946,11 @@ gst_omx_video_dec_decide_allocation (GstVideoDecoder * bdec, GstQuery * query)
         }
       }
 
-      /* if try to negotiate with caps feature memory:EGLImage
+      /* if try to negotiate with caps feature memory:GLMemory
        * and if allocator is not of type memory EGLImage then fails */
       if (feature
           && gst_caps_features_contains (feature,
-              GST_CAPS_FEATURE_MEMORY_EGL_IMAGE) && !found) {
+              GST_CAPS_FEATURE_MEMORY_GL_MEMORY) && !found) {
         return FALSE;
       }
     }
