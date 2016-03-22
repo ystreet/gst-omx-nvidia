@@ -92,12 +92,12 @@ libgstomx_la_CFLAGS = \
 	-DTEGRA_64 \
 	-DGST_USE_UNSTABLE_API=1 \
 	$(OMX_INCLUDEPATH) \
-	$(GST_EGL_CFLAGS) \
+	$(GST_GL_CFLAGS) \
 	$(GST_PLUGINS_BASE_CFLAGS) \
 	$(GST_BASE_CFLAGS) \
 	$(GST_CFLAGS)
 libgstomx_la_LIBADD = \
-	$(GST_EGL_LIBS) \
+	$(GST_GL_LIBS) \
 	$(GST_PLUGINS_BASE_LIBS) \
 	-lgstaudio-@GST_API_VERSION@ \
 	-lgstpbutils-@GST_API_VERSION@ \
