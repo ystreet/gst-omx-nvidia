@@ -326,12 +326,14 @@ gst_omx_buffer_pool_stop (GstBufferPool * bpool)
   guint i;
 
   /* Remove any buffers that are there */
-  for (i = 0; i < pool->buffers->len; i++) {
-    buf = g_ptr_array_index (pool->buffers, i);
-    GST_BUFFER_POOL_CLASS (gst_omx_buffer_pool_parent_class)->release_buffer
-        (bpool, buf);
+  if (pool->buffers) {
+    for (i = 0; i < pool->buffers->len; i++) {
+      buf = g_ptr_array_index (pool->buffers, i);
+      GST_BUFFER_POOL_CLASS (gst_omx_buffer_pool_parent_class)->release_buffer
+          (bpool, buf);
+    }
+    g_ptr_array_set_size (pool->buffers, 0);
   }
-  g_ptr_array_set_size (pool->buffers, 0);
 
   if (pool->caps)
     gst_caps_unref (pool->caps);
