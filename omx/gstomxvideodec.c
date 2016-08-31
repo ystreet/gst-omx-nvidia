@@ -2004,7 +2004,7 @@ gst_omx_video_dec_negotiate_nv_caps (GstOMXVideoDec * self,
     icaps = gst_video_info_to_caps (&state->info);
     icaps = gst_caps_make_writable (icaps);
 
-    ift = gst_caps_features_new ("memory:EGLImage");
+    ift = gst_caps_features_from_string ("memory:EGLImage");
     gst_caps_set_features (icaps, 0, ift);
 
     if (gst_pad_query_accept_caps (peer, icaps)) {
