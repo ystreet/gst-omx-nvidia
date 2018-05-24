@@ -3762,7 +3762,7 @@ gst_omx_video_dec_decide_allocation (GstVideoDecoder * bdec, GstQuery * query)
     gst_query_parse_allocation (query, &caps, NULL);
     if (caps && gst_video_info_from_caps (&info, caps)
         && info.finfo->format == GST_VIDEO_FORMAT_RGBA) {
-      gboolean found = FALSE;
+      gboolean allocator_found = FALSE, pool_found = FALSE;
       GstCapsFeatures *feature = gst_caps_get_features (caps, 0);
       /* Prefer an EGLImage allocator if available and we want to use it */
       n = gst_query_get_n_allocation_params (query);
@@ -3771,13 +3771,68 @@ gst_omx_video_dec_decide_allocation (GstVideoDecoder * bdec, GstQuery * query)
         GstAllocationParams params;
 
         gst_query_parse_nth_allocation_param (query, i, &allocator, &params);
-        if (allocator
-            && GST_IS_GL_MEMORY_EGL_ALLOCATOR (allocator)) {
-          found = TRUE;
-          gst_query_set_nth_allocation_param (query, 0, allocator, &params);
-          while (gst_query_get_n_allocation_params (query) > 1)
-            gst_query_remove_nth_allocation_param (query, 1);
-          break;
+        if (allocator) {
+          if (GST_IS_GL_MEMORY_EGL_ALLOCATOR (allocator)) {
+            allocator_found = TRUE;
+            gst_query_set_nth_allocation_param (query, 0, allocator, &params);
+            while (gst_query_get_n_allocation_params (query) > 1)
+              gst_query_remove_nth_allocation_param (query, 1);
+          }
+
+          gst_object_unref (allocator);
+
+          if (allocator_found)
+            break;
+        }
+      }
+      if (allocator_found) {
+        n = gst_query_get_n_allocation_pools (query);
+        for (i = 0; i < n; i++) {
+          GstBufferPool *pool = NULL;
+          GstGLBufferPool *gl_pool;
+          guint size, min, max;
+
+          gst_query_parse_nth_allocation_pool (query, i, &pool, &size, &min, &max);
+          if (!pool)
+            goto next_pool;
+          if (!GST_IS_GL_BUFFER_POOL (pool))
+            goto next_pool;
+          gl_pool = GST_GL_BUFFER_POOL (pool);
+          if ((gst_gl_context_get_gl_platform (gl_pool->context) & GST_GL_PLATFORM_EGL) == 0)
+            goto next_pool;
+
+          {
+            GstStructure *config = gst_buffer_pool_get_config (pool);
+            GstAllocator *allocator;
+
+            if (!gst_buffer_pool_config_get_allocator (config, &allocator, NULL))
+              goto next_pool;
+
+            if (!GST_IS_GL_MEMORY_EGL_ALLOCATOR (allocator)) {
+              /* XXX: validate gl parameters */
+              allocator = gst_allocator_find (GST_GL_MEMORY_EGL_ALLOCATOR_NAME);
+              if (!allocator) {
+                /* we can't make this work without an GstGLMemoryEGL allocator so bail */
+                break;
+              }
+
+              gst_buffer_pool_config_set_allocator (config, allocator, NULL);
+              if (!gst_buffer_pool_set_config (pool, config))
+                goto next_pool;
+            }
+          }
+
+          pool_found = TRUE;
+          gst_query_set_nth_allocation_pool (query, 0, pool, size, min, max);
+          while (gst_query_get_n_allocation_pools (query) > 1)
+            gst_query_remove_nth_allocation_pool (query, 1);
+
+next_pool:
+          if (pool)
+            gst_object_unref (pool);
+
+          if (pool_found)
+            break;
         }
       }
 
@@ -3785,7 +3840,7 @@ gst_omx_video_dec_decide_allocation (GstVideoDecoder * bdec, GstQuery * query)
        * and if allocator is not of type memory EGLImage then fails */
       if (feature
           && gst_caps_features_contains (feature,
-              GST_CAPS_FEATURE_MEMORY_GL_MEMORY) && !found) {
+              GST_CAPS_FEATURE_MEMORY_GL_MEMORY) && (!pool_found || !allocator_found)) {
         return FALSE;
       }
     }
