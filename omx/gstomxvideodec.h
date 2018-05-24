@@ -88,6 +88,8 @@ struct _GstOMXVideoDec
 
   GstFlowReturn downstream_flow_ret;
 
+  gboolean have_affine_transformation_meta;
+
 #ifdef USE_OMX_TARGET_TEGRA
   gboolean use_omxdec_res;
   gboolean full_frame_data;
