@@ -28,6 +28,7 @@
 #include <gst/gst.h>
 #include <gst/video/gstvideometa.h>
 #include <gst/video/gstvideopool.h>
+#include <gst/video/gstvideoaffinetransformationmeta.h>
 #ifdef HAVE_IVA_META
 #include "gstnvivameta_api.h"
 #endif
@@ -1531,6 +1532,13 @@ done:
   return ret;
 }
 
+static gfloat y_invert_matrix[] = {
+  1.0, 0.0, 0.0, 0.0,
+  0.0, -1.0, 0.0, 1.0,
+  0.0, 0.0, 1.0, 0.0,
+  0.0, 0.0, 0.0, 1.0,
+};
+
 static OMX_ERRORTYPE
 gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
 {
@@ -1774,10 +1782,21 @@ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
           goto done;
         }
 
+        if (self->have_affine_transformation_meta) {
+          GstVideoAffineTransformationMeta *af_meta;
+
+          af_meta = gst_buffer_add_video_affine_transformation_meta (buffer);
+          gst_video_affine_transformation_meta_apply_matrix (af_meta, y_invert_matrix);
+        } else {
+          GstTagList * tl;
+
+          tl = gst_tag_list_new ("image-orientation", "flip-rotate-180", NULL);
+
+          gst_video_decoder_merge_tags (GST_VIDEO_DECODER (self), tl,
+              GST_TAG_MERGE_REPLACE);
+        }
+
         buffers = g_list_append (buffers, buffer);
-      /* FIXME: replace with the affine transformation meta */
-/*      gl_mem->image->orientation =
-          GST_VIDEO_GL_TEXTURE_ORIENTATION_X_NORMAL_Y_FLIP;*/
         images = g_list_append (images, gst_gl_memory_egl_get_image ((GstGLMemoryEGL *) mem));
       }
 
@@ -4066,6 +4085,11 @@ next_pool:
     gst_buffer_pool_config_add_option (config,
         GST_BUFFER_POOL_OPTION_VIDEO_META);
   }
+
+  self->have_affine_transformation_meta =
+      gst_query_find_allocation_meta (query,
+      GST_VIDEO_AFFINE_TRANSFORMATION_META_API_TYPE, NULL);
+
   gst_buffer_pool_set_config (pool, config);
   gst_object_unref (pool);
 
