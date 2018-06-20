@@ -1,5 +1,5 @@
 /* GStreamer
- * Copyright (c) 2013-2015, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2013-2017, NVIDIA CORPORATION.  All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -104,6 +104,8 @@ G_DEFINE_TYPE (GstOmxSinkMemoryAllocator, gst_omx_sink_memory_allocator,
 #define DEFAULT_OVERLAY_Y      0
 #define DEFAULT_OVERLAY_W      0
 #define DEFAULT_OVERLAY_H      0
+#define DEFAULT_DC_HEAD        0
+#define DEFAULT_PROFILE        0
 
 enum
 {
@@ -113,7 +115,8 @@ enum
   PROP_OVERLAY_X,
   PROP_OVERLAY_Y,
   PROP_OVERLAY_W,
-  PROP_OVERLAY_H
+  PROP_OVERLAY_H,
+  PROP_PROFILE
 };
 
 static void
@@ -225,7 +228,7 @@ gst_omx_sink_buffer_pool_start (GstBufferPool * bpool)
   GstOmxSinkBufferPool *pool = GST_OMX_SINK_BUFFER_POOL (bpool);
   GstOmxVideoSink *self = GST_OMX_VIDEO_SINK (pool->element);
   GstCaps *caps;
-  guint min, max;
+  guint min, max, size;
   GstStructure *config;
   GstOMXPort *port = pool->port;
   OMX_ERRORTYPE err = OMX_ErrorNone;
@@ -239,8 +242,9 @@ gst_omx_sink_buffer_pool_start (GstBufferPool * bpool)
     return FALSE;
   }
 
+
   config = gst_buffer_pool_get_config (bpool);
-  gst_buffer_pool_config_get_params (config, &caps, NULL, &min, &max);
+  gst_buffer_pool_config_get_params (config, &caps, &size, &min, &max);
   gst_structure_free (config);
 
   min = MAX (min, max);
@@ -250,6 +254,8 @@ gst_omx_sink_buffer_pool_start (GstBufferPool * bpool)
     if (err == OMX_ErrorNone) {
       port->port_def.nBufferCountActual = min;
       err = gst_omx_port_update_port_definition (port, &port->port_def);
+      if (err != OMX_ErrorNone)
+        return FALSE;
     }
   }
   if (!gst_omx_port_is_enabled (port)) {
@@ -261,6 +267,9 @@ gst_omx_sink_buffer_pool_start (GstBufferPool * bpool)
       GST_OBJECT_UNLOCK (pool);
       return FALSE;
     }
+
+    port->extra_data_size = size - self->sink_in_port->port_def.nBufferSize;
+
     if (gst_omx_port_allocate_buffers (self->sink_in_port) != OMX_ErrorNone) {
       GST_OBJECT_UNLOCK (pool);
       return FALSE;
@@ -622,8 +631,10 @@ gst_omx_video_sink_change_state (GstElement * element,
     case GST_STATE_CHANGE_NULL_TO_READY:
       break;
     case GST_STATE_CHANGE_READY_TO_PAUSED:
+      omxsink->processing = TRUE;
       break;
     case GST_STATE_CHANGE_PAUSED_TO_READY:
+      omxsink->processing = FALSE;
       omxsink->fps_n = 0;
       omxsink->fps_d = 1;
       GST_VIDEO_SINK_WIDTH (omxsink) = 0;
@@ -656,7 +667,8 @@ gst_omx_video_sink_change_state (GstElement * element,
        * reconfigure flag is set here which is checked in setcaps function
        * to reconfigure sink's input port incase setcaps is called again.
        */
-      omxsink->sink_in_port->reconfigure = TRUE;
+      if (omxsink->sink_in_port)
+        omxsink->sink_in_port->reconfigure = TRUE;
       break;
     case GST_STATE_CHANGE_READY_TO_NULL:
       break;
@@ -697,7 +709,7 @@ gst_omx_video_sink_class_init (GstOmxVideoSinkClass * klass)
    */
   g_object_class_install_property (gobject_class, PROP_OVERLAY,
       g_param_spec_uint ("overlay", "overlay",
-          "Overlay index", 1, 2,
+          "Overlay index", 0, 5,
           DEFAULT_OVERLAY, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   /*
    *  Overlay Depth.
@@ -734,6 +746,13 @@ gst_omx_video_sink_class_init (GstOmxVideoSinkClass * klass)
       g_param_spec_uint ("overlay-h", "overlay-h",
           "Overlay Height", 0, G_MAXUINT,
           DEFAULT_OVERLAY_H, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  /*
+   *  Overlay Profile.
+   */
+  g_object_class_install_property (gobject_class, PROP_PROFILE,
+      g_param_spec_uint ("overlay-profile", "overlay-profile",
+          "Overlay Profile", 0, G_MAXUINT,
+          DEFAULT_PROFILE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 }
 
 static void
@@ -750,7 +769,10 @@ gst_omx_video_sink_init (GstOmxVideoSink * omxvideosink)
   omxvideosink->overlay_y = DEFAULT_OVERLAY_Y;
   omxvideosink->overlay_w = DEFAULT_OVERLAY_W;
   omxvideosink->overlay_h = DEFAULT_OVERLAY_H;
+  omxvideosink->dc_head = DEFAULT_DC_HEAD;
+  omxvideosink->profile = DEFAULT_PROFILE;
 
+  omxvideosink->processing = FALSE;
   omxvideosink->update_pos = FALSE;
   omxvideosink->update_size = FALSE;
 }
@@ -774,6 +796,11 @@ gst_omx_video_sink_set_property (GObject * object, guint prop_id,
       if (self->overlay_x != x)
         self->update_pos = TRUE;
       self->overlay_x = x;
+
+      if (self->processing && self->update_pos) {
+        if (OMX_ErrorNone != Update_Overlay_Position (self))
+            GST_ERROR_OBJECT (self, "Failed to set Overlay Position");
+      }
     }
       break;
     case PROP_OVERLAY_Y:
@@ -782,6 +809,11 @@ gst_omx_video_sink_set_property (GObject * object, guint prop_id,
       if (self->overlay_y != y)
         self->update_pos = TRUE;
       self->overlay_y = y;
+
+      if (self->processing && self->update_pos) {
+        if (OMX_ErrorNone != Update_Overlay_Position (self))
+            GST_ERROR_OBJECT (self, "Failed to set Overlay Position");
+      }
     }
       break;
     case PROP_OVERLAY_W:
@@ -790,6 +822,11 @@ gst_omx_video_sink_set_property (GObject * object, guint prop_id,
       if (self->overlay_w != w)
         self->update_size = TRUE;
       self->overlay_w = w;
+
+      if (self->processing && self->update_size) {
+        if (OMX_ErrorNone != Update_Overlay_Size (self))
+            GST_ERROR_OBJECT (self, "Failed to set Overlay Width");
+      }
     }
       break;
     case PROP_OVERLAY_H:
@@ -798,6 +835,16 @@ gst_omx_video_sink_set_property (GObject * object, guint prop_id,
       if (self->overlay_h != h)
         self->update_size = TRUE;
       self->overlay_h = h;
+
+      if (self->processing && self->update_size) {
+        if (OMX_ErrorNone != Update_Overlay_Size (self))
+            GST_ERROR_OBJECT (self, "Failed to set Overlay Width");
+      }
+    }
+      break;
+    case PROP_PROFILE:
+    {
+      self->profile = g_value_get_uint (value);
     }
       break;
     default:
@@ -830,6 +877,9 @@ gst_omx_video_sink_get_property (GObject * object, guint prop_id,
       break;
     case PROP_OVERLAY_H:
       g_value_set_uint (value, self->overlay_h);
+      break;
+    case PROP_PROFILE:
+      g_value_set_uint (value, self->profile);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -875,7 +925,7 @@ gst_omx_video_sink_start (GstBaseSink * videosink)
       /* Fallback */
       in_port_index = 0;
     } else {
-      GST_DEBUG_OBJECT (self, "Detected %lu ports, starting at %lu",
+      GST_DEBUG_OBJECT (self, "Detected %u ports, starting at %u",
           param.nPorts, param.nStartPortNumber);
       in_port_index = param.nStartPortNumber + 0;
     }
@@ -939,6 +989,32 @@ gst_omx_video_sink_stop (GstBaseSink * videosink)
   return TRUE;
 }
 
+static OMX_ERRORTYPE
+gst_omx_set_stride_alignment (GstOmxVideoSink * self,
+    guint32 align)
+{
+  OMX_INDEXTYPE eIndex;
+  OMX_ERRORTYPE eError;
+
+  eError =  gst_omx_component_get_index (self->sink,
+                   (gpointer)NVX_INDEX_CONFIG_VIDEOSTRIDEALIGN,
+                   &eIndex);
+
+  if (eError == OMX_ErrorNone) {
+    NVX_CONFIG_VIDEO_STRIDEALIGN oStride;
+
+    GST_OMX_INIT_STRUCT (&oStride);
+
+    eError = gst_omx_component_get_config (self->sink, eIndex, &oStride);
+
+    if (eError == OMX_ErrorNone) {
+      oStride.nAlign = (unsigned long) align;
+      eError = gst_omx_component_set_config (self->sink, eIndex, &oStride);
+    }
+  }
+  return eError;
+}
+
 static void
 gst_omx_video_sink_check_nvfeatures (GstOmxVideoSink * self, GstCaps * caps)
 {
@@ -946,6 +1022,13 @@ gst_omx_video_sink_check_nvfeatures (GstOmxVideoSink * self, GstCaps * caps)
   feature = gst_caps_get_features (caps, 0);
   if (gst_caps_features_contains (feature, "memory:NVMM")) {
     self->hw_path = TRUE;
+  }
+
+  if (!self->hw_path) {
+    if (gst_omx_set_stride_alignment (self, 4)
+        != OMX_ErrorNone) {
+      g_warning ("Failed to set stride alignment.\n");
+    }
   }
 }
 
@@ -1003,6 +1086,55 @@ gstomx_use_overlay_index_extension (GstOmxVideoSink * self)
   return eError;
 }
 
+static OMX_ERRORTYPE
+gstomx_set_overlay_dc_head (GstOmxVideoSink * self)
+{
+  NVX_PARAM_OVERLAYDCHEAD param;
+  OMX_INDEXTYPE eIndex;
+  OMX_ERRORTYPE eError = OMX_ErrorNone;
+
+  eError = gst_omx_component_get_index (GST_OMX_VIDEO_SINK (self)->sink,
+        (char *) NVX_INDEX_PARAM_OVERLAYDCHEAD, &eIndex);
+  if (eError == OMX_ErrorNone) {
+    GST_OMX_INIT_STRUCT (&param);
+    param.nPortIndex = self->sink_in_port->index;
+    param.nOverlayDcHead = self->dc_head;
+      eError =
+        gst_omx_component_set_parameter (GST_OMX_VIDEO_SINK (self)->sink,
+           eIndex,
+           &param);
+  }
+
+  if (eError != OMX_ErrorNone) {
+    g_error ("Couldnt use the Vendor Extension %s %x\n",
+        (char *) NVX_INDEX_PARAM_OVERLAYDCHEAD, eError);
+  }
+
+  return eError;
+}
+
+static OMX_ERRORTYPE
+gstomx_set_overlay_profile (GstOmxVideoSink * self)
+{
+    OMX_INDEXTYPE eIndex;
+    NVX_CONFIG_PROFILE oProf;
+    OMX_ERRORTYPE eError = OMX_ErrorNone;
+
+    eError = gst_omx_component_get_index (GST_OMX_VIDEO_SINK (self)->sink,
+            (char *) NVX_INDEX_CONFIG_PROFILE, &eIndex);
+    if (eError != OMX_ErrorNone) {
+        g_error ("Couldnt use the Vendor Extension %s \n",
+                (char *) NVX_INDEX_CONFIG_PROFILE);
+    }
+    GST_OMX_INIT_STRUCT (&oProf);
+    oProf.bProfile = self->profile;
+    strcpy(oProf.ProfileFileName, "/tmp/profile.txt");
+    eError =
+        gst_omx_component_set_config (GST_OMX_VIDEO_SINK (self)->sink,
+                eIndex, &oProf);
+    return eError;
+}
+
 gboolean
 gst_omx_video_sink_setcaps (GstBaseSink * sink, GstCaps * caps)
 {
@@ -1010,7 +1142,7 @@ gst_omx_video_sink_setcaps (GstBaseSink * sink, GstCaps * caps)
   GstVideoInfo info;
   GstBufferPool *newpool, *oldpool;
   GstStructure *config;
-  gint size, min;
+  guint size, min;
   gboolean is_format_change = FALSE;
   gboolean needs_disable = FALSE;
   OMX_PARAM_PORTDEFINITIONTYPE port_def;
@@ -1026,12 +1158,23 @@ gst_omx_video_sink_setcaps (GstBaseSink * sink, GstCaps * caps)
   /* Check if the caps change is a real format change or if only irrelevant
    * parts of the caps have changed or nothing at all.
    */
-  is_format_change |= port_def.format.video.nFrameWidth != info.width;
-  is_format_change |= port_def.format.video.nFrameHeight != info.height;
+  is_format_change |= port_def.format.video.nFrameWidth != (guint)info.width;
+  is_format_change |= port_def.format.video.nFrameHeight != (guint)info.height;
 
   is_format_change |= (port_def.format.video.xFramerate == 0 && info.fps_n != 0)
       || (port_def.format.video.xFramerate !=
-      (info.fps_n << 16) / (info.fps_d));
+      (guint)(info.fps_n << 16) / (info.fps_d));
+
+  g_mutex_lock (&self->flow_lock);
+  oldpool = self->pool;
+  if (oldpool != NULL) {
+    GstCaps *pcaps;
+    config = gst_buffer_pool_get_config (oldpool);
+    gst_buffer_pool_config_get_params (config, &pcaps, &size, NULL, NULL);
+    is_format_change |= !gst_caps_is_equal (caps, pcaps);
+    gst_structure_free (config);
+  }
+  g_mutex_unlock (&self->flow_lock);
 
   needs_disable =
       gst_omx_component_get_state (self->sink,
@@ -1083,6 +1226,23 @@ gst_omx_video_sink_setcaps (GstBaseSink * sink, GstCaps * caps)
   size = info.size;
   min = MAX (port_def.nBufferCountMin, 4);
   port_def.nBufferCountActual = min;
+
+  switch (info.finfo->format) {
+    case GST_VIDEO_FORMAT_I420:
+      port_def.format.video.eColorFormat = OMX_COLOR_FormatYUV420Planar;
+      break;
+    case GST_VIDEO_FORMAT_NV12:
+      port_def.format.video.eColorFormat = OMX_COLOR_FormatYUV420SemiPlanar;
+      break;
+    case GST_VIDEO_FORMAT_RGBA:
+      port_def.format.video.eColorFormat = OMX_COLOR_Format32bitBGRA8888;
+      break;
+    default:
+      GST_ERROR_OBJECT (self, "Unsupported format %s",
+          gst_video_format_to_string (info.finfo->format));
+      return FALSE;
+      break;
+  }
 
   GST_DEBUG_OBJECT (self, "Setting inport port definition");
 
@@ -1148,12 +1308,15 @@ gst_omx_video_sink_setcaps (GstBaseSink * sink, GstCaps * caps)
 
   /* unref the old sink */
   if (oldpool) {
+    gst_buffer_pool_set_active (oldpool, FALSE);
     gst_object_unref (oldpool);
   }
 
 #ifdef USE_OMX_TARGET_TEGRA
   gstomx_use_allow_secondary_window_extension (self);
   gstomx_use_overlay_index_extension (self);
+  gstomx_set_overlay_dc_head (self);
+  gstomx_set_overlay_profile (self);
 #endif
 
   if (OMX_ErrorNone != Update_Overlay_PlaneBlend (self))
@@ -1224,6 +1387,13 @@ gst_omx_video_sink_show_frame (GstVideoSink * video_sink, GstBuffer * buf)
      }
    */
 
+  if (gst_omx_component_get_last_error (self->sink) != OMX_ErrorNone) {
+    GST_ERROR_OBJECT (self, "Component in error state: %s (0x%08x)",
+        gst_omx_component_get_last_error_string (self->sink),
+        gst_omx_component_get_last_error (self->sink));
+    return GST_FLOW_ERROR;
+  }
+
   mem = gst_buffer_peek_memory (buf, 0);
 
   if (mem
@@ -1233,25 +1403,6 @@ gst_omx_video_sink_show_frame (GstVideoSink * video_sink, GstBuffer * buf)
     omxbuf = gst_mini_object_get_qdata (GST_MINI_OBJECT_CAST (buf),
         gst_omx_sink_data_quark);
 
-    gst_omx_handle_messages (self->sink);
-
-    /*
-     * The number of buffers in the decoder output pool is maintained
-     * using the length of the pending_buffers queue
-     */
-    g_queue_pop_head (&self->sink_in_port->pending_buffers);
-
-    /*
-     * To prevent deadlock when no buffers are available in the
-     * decoder output buffer pool, we make sure there is at least
-     * one buffer in the pool
-     */
-    while (g_queue_get_length (&self->sink_in_port->pending_buffers) == 0) {
-      g_mutex_lock (&self->sink->messages_lock);
-      g_cond_wait (&self->sink->messages_cond, &self->sink->messages_lock);
-      g_mutex_unlock (&self->sink->messages_lock);
-      gst_omx_handle_messages (self->sink);
-    }
     res = GST_FLOW_OK;
   } else {
 /* Buffer is not from our pool, copy data */
@@ -1287,8 +1438,10 @@ gst_omx_video_sink_show_frame (GstVideoSink * video_sink, GstBuffer * buf)
       goto done;
     }
     gst_buffer_map (buf, &map, GST_MAP_READ);
-    memcpy (omxbuf->omx_buf->pBuffer + omxbuf->omx_buf->nOffset,
-        map.data, map.size);
+    if (map.data) {
+      memcpy (omxbuf->omx_buf->pBuffer + omxbuf->omx_buf->nOffset,
+          map.data, map.size);
+    }
     gst_buffer_unmap (buf, &map);
   }
   omxbuf->omx_buf->nFilledLen = mem->size;
@@ -1423,18 +1576,18 @@ gst_omx_video_sink_event (GstBaseSink * sink, GstEvent * event)
 {
 
   GstOmxVideoSink *omxsink = GST_OMX_VIDEO_SINK (sink);
+  GstOMXAcquireBufferReturn acq_ret;
 
   switch (GST_EVENT_TYPE (event)) {
     case GST_EVENT_CUSTOM_DOWNSTREAM: {
       if (gst_event_has_name (event, "ReleaseLastBuffer")) {
         GstOMXBuffer *omxbuf;
-        gst_omx_port_acquire_buffer (omxsink->sink_in_port, &omxbuf);
-        omxbuf->gst_buf = NULL;
-
-        if (G_LIKELY (omxbuf)) {
-            omxbuf->omx_buf->nFilledLen = 0;
-            omxbuf->omx_buf->nFlags |= OMX_BUFFERFLAG_EOS;
-            gst_omx_port_release_buffer (omxsink->sink_in_port, omxbuf);
+        acq_ret = gst_omx_port_acquire_buffer (omxsink->sink_in_port, &omxbuf);
+        if (acq_ret == GST_OMX_ACQUIRE_BUFFER_OK) {
+          omxbuf->gst_buf = NULL;
+          omxbuf->omx_buf->nFilledLen = 0;
+          omxbuf->omx_buf->nFlags |= OMX_BUFFERFLAG_EOS;
+          gst_omx_port_release_buffer (omxsink->sink_in_port, omxbuf);
         }
         if (gst_base_sink_is_last_sample_enabled (sink)) {
           gst_base_sink_set_last_sample_enabled(sink, FALSE);

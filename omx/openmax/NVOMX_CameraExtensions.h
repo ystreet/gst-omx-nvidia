@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2014, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2009-2016, NVIDIA CORPORATION.  All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -71,25 +71,15 @@ typedef enum  NVX_WHITEBALCONTROLTYPE {
    NVX_WhiteBalControlMax = 0x7FFFFFFF
 }  NVX_WHITEBALCONTROLTYPE;
 
-typedef enum NVX_VIDEO_ERROR_RESILIENCY_LEVEL_TYPE {
-    NVX_VIDEO_ErrorResiliency_None = 0,
-    NVX_VIDEO_ErrorResiliency_Low,
-    NVX_VIDEO_ErrorResiliency_High,
-    NVX_VIDEO_ErrorResiliency_Invalid = 0x7FFFFFFF
-} NVX_VIDEO_ERROR_RESILIENCY_LEVEL_TYPE;
+typedef struct NVX_VIDEO_ENC_H264_SPECIFIC_PARAM {
+    OMX_U32 nH264FrameNumBits;
+    OMX_BOOL bGapsInFrameNumAllowed;
+}NVX_VIDEO_ENC_H264_SPECIFIC_PARAM;
 
-typedef enum NVX_VIDEO_APPLICATION_TYPE {
-    NVX_VIDEO_Application_Camcorder = 0,    /**< Timestamps set for camcorder */
-    NVX_VIDEO_Application_VideoTelephony,   /**< Timestamps set for telephony */
-    NVX_VIDEO_Application_Invalid = 0x7FFFFFFF
-} NVX_VIDEO_APPLICATION_TYPE;
-
-typedef enum NVX_VIDEO_RATECONTROL_MODE{
-    NVX_VIDEO_RateControlMode_CBR = 0,
-    NVX_VIDEO_RateControlMode_VBR,
-    NVX_VIDEO_RateControlMode_VBR2,
-    NVX_VIDEO_RateControlMode_Invalid = 0x7FFFFFFF
-}NVX_VIDEO_RATECONTROL_MODE;
+typedef struct NVX_VIDEO_ENC_HEVC_SPECIFIC_PARAM {
+    OMX_U32 nSliceHeaderSpacing;
+    OMX_U32 nH265PocLsbBits;
+}NVX_VIDEO_ENC_HEVC_SPECIFIC_PARAM;
 
 /** Param extension index to fine tune video encoder configuration.
  *  See ::NVX_PARAM_VIDENCPROPERTY
@@ -102,8 +92,6 @@ typedef struct NVX_PARAM_VIDENCPROPERTY
     OMX_VERSIONTYPE nVersion;       /**< NVX extensions specification version information */
     OMX_U32 nPortIndex;             /**< Port that this struct applies to */
 
-    NVX_VIDEO_APPLICATION_TYPE eApplicationType;                    /**< Application Type */
-    NVX_VIDEO_ERROR_RESILIENCY_LEVEL_TYPE eErrorResiliencyLevel;    /**< Error Resiliency Level */
     OMX_BOOL bSvcEncodeEnable;                                      /**< Boolean to enable H.264 Scalable Video Codec mode */
     OMX_BOOL bSetMaxEncClock;                                       /**< Set Maximum clock for encoder hardware */
     OMX_BOOL bFrameSkip;                                            /**< Enable skipping of Frames */
@@ -115,28 +103,28 @@ typedef struct NVX_PARAM_VIDENCPROPERTY
     OMX_BOOL bInsertAUD;                                            /**< Insert AUD in the bitstream */
     OMX_U32  nPeakBitrate;                                          /**< Peak Bitrate for VBR, if set to 0, encoder derive it from Level Idc */
     OMX_BOOL bEnableStuffing;                                       /**< Enable byte stuffing to maintain bitrate */
-    OMX_BOOL bLowLatency;                                           /**< Reduce latency by lowering peak frame size (for both I and P frames) */
     OMX_BOOL bSliceLevelEncode;                                     /**< Reduce latency by delivering packet size based slices (for both I and P frames) */
     OMX_BOOL bSliceIntraRefreshEnable;                              /**< Enable Slice Intra Refresh Wave */
     OMX_U32  SliceIntraRefreshInterval;                             /**< Slice Intra Refresh Interval in number of frames */
     OMX_U32  nVirtualBufferSize;                                    /**< Virtual Buffer Size specified by the app in bits */
     OMX_BOOL bEnableTwopassCBR;                                     /**< Enable two pass cbr mode if RC mode set is CBR*/
+    OMX_BOOL bFirstPassSourceHalfScaled;                            /**< Enable quarter resolution first pass when two pass cbr mode is enabled*/
+    OMX_BOOL bEnableTNR;                                            /**< Enable TNR*/
+    OMX_BOOL bEnableExternalPictureRC;                              /**< Enable External picture RC*/
+    OMX_U32  nsessionMaxQP;                                         /**< Set Maximum QP per encode session when external picture RC enabled*/
+    OMX_BOOL bEnableExternalRPSControl;                             /**< Enable dynamic RPS control*/
+    OMX_BOOL bEnableROI;                                            /**< Enable region of interest*/
+    OMX_BOOL bEnableSEIforROI;                                      /**< Enable addition of ROI information to SEI NAL*/
+    OMX_BOOL bEnableMVBufferDump;                                   /**< Enable mv buffer dump*/
+    OMX_BOOL bEnableReconCRC;                                       /**< Enable Recon CRC generation*/
+    union {
+        NVX_VIDEO_ENC_H264_SPECIFIC_PARAM h264;
+        NVX_VIDEO_ENC_HEVC_SPECIFIC_PARAM hevc;
+    }codecParams;                                                   /**< Codec specific parameter settings*/
 } NVX_PARAM_VIDENCPROPERTY;
 /** Param extension index to set video encoder rate control mode.
  *  See ::NVX_PARAM_RATECONTROLMODE
  */
- #define NVX_INDEX_PARAM_RATECONTROLMODE "OMX.Nvidia.index.param.ratecontrolmode"
-/** Holds data to set video encoder rate control mode.
- * See ::NVX_IndexParamRateControlMode
- */
-typedef struct NVX_PARAM_RATECONTROLMODE
-{
-    OMX_U32 nSize;                  /**< Size of the structure in bytes */
-    OMX_VERSIONTYPE nVersion;       /**< NVX extensions specification version information */
-    OMX_U32 nPortIndex;             /**< Port that this struct applies to */
-
-    NVX_VIDEO_RATECONTROL_MODE eRateCtrlMode;
-}NVX_PARAM_RATECONTROLMODE;
 
 /** Holds boolean parameter.
  */
@@ -258,6 +246,30 @@ typedef struct NVX_CONFIG_VIDEO_MVC_INFO
 
     OMX_BOOL stitch_MVCViews_Flag;     /**< Specifies if the 2 MVC views should be  stitched*/
 } NVX_CONFIG_VIDEO_MVC_INFO;
+
+/** Param extension index to configure video enc HW preset level
+*   see: NVX_CONFIG_VIDEO_HWPRESETLEVEL
+*/
+#define NVX_INDEX_CONFIG_VIDEO_ENCHWPRESETLEVEL "OMX.Nvidia.index.config.video.hwpresetlevel"
+
+// Video enc preset level
+typedef enum _NVX_VIDEO_HWPRESET_ {
+    NVX_VIDEO_HWPRESET_ULTRAFAST  = 0, // ultrafast preset
+    NVX_VIDEO_HWPRESET_FAST       = 1, // fast preset
+    NVX_VIDEO_HWPRESET_MEDIUM     = 2, // medium preset
+    NVX_VIDEO_HWPRESET_SLOW       = 3, // slow preset
+    NVX_VIDEO_HWPRESET_Invalid    = 0x7FFFFFFF
+} NVX_VIDEO_HWPRESET;
+
+// Video Enc HW Preset level
+typedef struct NVX_CONFIG_VIDEO_HWPRESET_LEVEL
+{
+    OMX_U32 nSize;                    /**< Size of the structure in bytes */
+    OMX_VERSIONTYPE nVersion;         /**< NVX extensions specification version */
+    OMX_U32 nPortIndex;               /**< Port that this struct applies to */
+
+    NVX_VIDEO_HWPRESET hwPreset;      /**< Video Enc HW Preset */
+} NVX_CONFIG_VIDEO_HWPRESET_LEVEL;
 
 /** Param extension index to configure slice level encode.
 *   see: NVX_CONFIG_VIDEO_SLICELEVELENCODE

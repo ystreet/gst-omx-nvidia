@@ -1,4 +1,4 @@
-/* Copyright (c) 2007-2014 NVIDIA Corporation.  All rights reserved.
+/* Copyright (c) 2007-2016 NVIDIA Corporation.  All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -50,6 +50,7 @@
 #include "NVOMX_EncoderExtensions.h"
 #include "NVOMX_DrmExtensions.h"
 #include "NVOMX_ColorFormatExtensions.h"
+#include "NVOMX_TNR.h"
 
 struct NvOsSemaphoreRec;
 
@@ -93,6 +94,9 @@ typedef enum
     /* pBuffer is an android buffer_handle_t */
     NVX_BUFFERTYPE_ANDROID_BUFFER_HANDLE_T,
 
+    /*pBuffer is a native_handle allocated using native_handle_create() : MediaServer - Media DRM split*/
+    NVX_BUFFERTYPE_ANDROID_SHARED_PTR_T,
+
     NVX_BUFFERTYPE_MAX = 0x7FFFFFFF
 }NvxBufferType;
 
@@ -108,6 +112,8 @@ typedef struct NvxBufferPlatformPrivateStruct
     OMX_BOOL nvmmBufIsPinned;
     /* Stereo layout info */
     OMX_U32 StereoInfo;
+    void *pNativeHandle;
+    void *shared_buffer;
     OMX_U32 rawHeaderOffset;
     void *pData;
 } NvxBufferPlatformPrivate;
@@ -245,6 +251,17 @@ typedef enum
     NvxError_Max = 0x7FFFFFFF
 } NvxError;
 
+/** Defines custom extra data types. */
+typedef enum
+{
+    NVX_ExtraDataVendorStart      = 0x7F000001,          /** Start of extended OpenMAX extra data types */
+    NVX_ExtraDataVideoEncInput    = 0x7F000002,          /** Video encoder input buffer extra data types */
+    NVX_ExtraDataVideoEncOutput   = 0x7F000003,          /** Video encoder output buffer  extra data types */
+    NVX_ExtraDataVideoDecInput    = 0x7F000004,          /** Video decoder input buffer  extra data types */
+    NVX_ExtraDataVideoDecOutput   = 0x7F000005,          /** Video decoder output buffer  extra data types */
+    NVX_ExtraDataMax = 0x7FFFFFFF
+}NVX_EXTRADATATYPE;
+
 /** Profiling config for internal use only. */
 #define NVX_INDEX_CONFIG_PROFILE "OMX.Nvidia.index.config.profile"
 /** Holds a profiling information. */
@@ -273,6 +290,13 @@ typedef struct NVX_CONFIG_PROFILE
     OMX_U32  nTotFrameDrops;
     OMX_BOOL bDisableRendering;
 
+    // For OMXMemCopy
+    OMX_U64 *pOMXMemCopy;
+    OMX_BOOL bOMXBufftoRMSurf;
+    OMX_U32 NumEntriesForMemCpyProf;
+    OMX_U32 AvgBlitTime;
+    OMX_BOOL bEnableBlitStats;
+
     /// For camera:
     OMX_U64 nTSPreviewStart;
     OMX_U64 nTSCaptureStart;
@@ -289,6 +313,28 @@ typedef struct NVX_CONFIG_PROFILE
     OMX_U32 nBadFrameCount;
 } NVX_CONFIG_PROFILE;
 
+#define NVX_INDEX_PARAM_VIDEO_SAR "OMX.Nvidia.index.config.sampleaspectratio"
+/** Sample aspect ratio */
+typedef struct NVX_PARAM_SAMPLE_ASPECT_RATIO
+{
+    OMX_U32 nSize;               /**< Size of the structure in bytes */
+    OMX_VERSIONTYPE nVersion;    /**< NVX extensions specification version information */
+    OMX_U32 nPortIndex;          /**< Port that this struct applies to */
+    // The sample or pixel aspect ratio
+    OMX_U32 sar_width;
+    OMX_U32 sar_height;
+} NVX_PARAM_SAMPLE_ASPECT_RATIO;
+
+
+#define NVX_INDEX_PARAM_SCALED_DIMENSION "OMX.Nvidia.index.param.scaleddimension"
+typedef struct NVX_PARAM_SCALED_DIMENSION
+{
+    OMX_U32 nSize;
+    OMX_VERSIONTYPE nVersion;
+
+    OMX_U32 height;
+    OMX_U32 width;
+} NVX_PARAM_SCALED_DIMENSION;
 
 #define NVX_INDEX_PARAM_EMBEDRMSURACE \
     "OMX.Nvidia.index.param.embedrmsurface"
@@ -365,6 +411,11 @@ typedef struct NVX_CONFIG_PROFILE
  */
 #define OMX_BUFFERFLAG_POSTVIEW 0x80000000
 
+/** Decoder error flag for Mjolnir.
+ * Indicates that decoder detected an error in the bitstream.
+ * @ingroup buf
+ */
+#define OMX_BUFFERFLAG_DEC_ERROR 0x00010000
 
 /** Holds data to enable proprietary buffer transfers. */
 typedef struct NVX_PARAM_USENVBUFFER
@@ -507,6 +558,7 @@ typedef enum {
    NV_VPP_EFFECT_TYPE_NOEFFECT = 0,
    NV_VPP_EFFECT_TYPE_NEGATIVE,
    NV_VPP_EFFECT_TYPE_DEBLOCK,
+   NV_VPP_EFFECT_TYPE_CUSTOM,
    NV_VPP_EFFECT_TYPE_MAX = 0xFFFFFF,
 }NVX_VPP_EFFECT_TYPE;
 
@@ -653,6 +705,7 @@ typedef struct NVX_CONFIG_SKIP_NONREF_FRAMES
   OMX_BOOL bSkipNonRefFrames;
 } NVX_CONFIG_SKIP_NONREF_FRAMES;
 #endif
+
 
 
 /** @} */

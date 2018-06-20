@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2011, Hewlett-Packard Development Company, L.P.
  *   Author: Sebastian Dröge <sebastian.droege@collabora.co.uk>, Collabora Ltd.
- * Copyright (c) 2013 - 2015, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2013 - 2016, NVIDIA CORPORATION.  All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -93,6 +93,10 @@ struct _GstOMXVideoDec
   gboolean full_frame_data;
   gboolean disable_dpb;
   guint32 skip_frames;
+  guint32 output_buffers;
+  gboolean enable_error_check;
+  gboolean enable_frame_type_reporting;
+  gboolean cpu_dec_buf;
 #endif
 
 #ifdef USE_OMX_TARGET_RPI
@@ -117,6 +121,7 @@ struct _GstOMXVideoDecClass
       GstVideoCodecState * state);
     GstFlowReturn (*prepare_frame) (GstOMXVideoDec * self,
       GstVideoCodecFrame * frame);
+    void (*video_dec_loop) (GstOMXBuffer *buf);
 };
 
 GType gst_omx_video_dec_get_type (void);

@@ -57,7 +57,10 @@ struct _GstOmxVideoSink
   guint overlay_y;
   guint overlay_w;
   guint overlay_h;
+  guint dc_head;
+  guint profile;
 
+  gboolean processing;
   gboolean update_pos;
   gboolean update_size;
 

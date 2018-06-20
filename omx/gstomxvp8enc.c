@@ -22,7 +22,7 @@
 #endif
 
 #include <gst/gst.h>
-
+#include <OMX_IndexExt.h>
 #include "gstomxvp8enc.h"
 
 GST_DEBUG_CATEGORY_STATIC (gst_omx_vp8_enc_debug_category);
@@ -98,41 +98,31 @@ gst_omx_vp8_enc_get_caps (GstOMXVideoEnc * self, GstOMXPort * port,
     GstVideoCodecState * state)
 {
   GstCaps *caps;
+  OMX_ERRORTYPE err;
+  OMX_VIDEO_PARAM_VP8TYPE param;
   gint profile = 0;
 
   caps = gst_caps_new_empty_simple ("video/x-vp8");
 
-#ifdef USE_OMX_TARGET_TEGRA
-{
-  OMX_INDEXTYPE eIndex;
-  OMX_ERRORTYPE err;
-  NVX_VIDEO_PARAM_VP8TYPE param;
-
-  err = gst_omx_component_get_index (self->enc,
-      (char *) NVX_INDEX_PARAM_VP8TYPE, &eIndex);
-
-  if (err == OMX_ErrorNone) {
-    GST_OMX_INIT_STRUCT (&param);
-    param.nPortIndex = self->enc_out_port->index;
-    err = gst_omx_component_get_parameter (self->enc, eIndex, &param);
-
-  } else {
-    GST_WARNING_OBJECT (self, "Coudn't get extension index for %s",
-        (char *) NVX_INDEX_PARAM_VP8TYPE);
-  }
+  GST_OMX_INIT_STRUCT (&param);
+  param.nPortIndex = self->enc_out_port->index;
+  err = gst_omx_component_get_parameter (self->enc, OMX_IndexParamVideoVp8, &param);
+  if (err != OMX_ErrorNone && err != OMX_ErrorUnsupportedIndex
+      && err != OMX_ErrorNotImplemented)
+     GST_WARNING_OBJECT (self, "Coudn't get parameter for OMX_IndexParamVideoVp8");
 
   if (err == OMX_ErrorNone) {
     switch (param.eLevel) {
-      case NVX_VIDEO_VP8Level_Version0:
+      case OMX_VIDEO_VP8Level_Version0:
         profile = 0;
         break;
-      case NVX_VIDEO_VP8Level_Version1:
+      case OMX_VIDEO_VP8Level_Version1:
         profile = 1;
         break;
-      case NVX_VIDEO_VP8Level_Version2:
+      case OMX_VIDEO_VP8Level_Version2:
         profile = 2;
         break;
-      case NVX_VIDEO_VP8Level_Version3:
+      case OMX_VIDEO_VP8Level_Version3:
         profile = 3;
         break;
       default:
@@ -142,8 +132,7 @@ gst_omx_vp8_enc_get_caps (GstOMXVideoEnc * self, GstOMXPort * port,
 
     gst_caps_set_simple (caps, "profile", G_TYPE_INT, profile, NULL);
   }
-}
-#endif
+
 
   return caps;
 }

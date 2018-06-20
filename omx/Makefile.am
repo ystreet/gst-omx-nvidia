@@ -19,15 +19,18 @@ libgstomx_la_SOURCES = \
 	gstomxmjpegdec.c \
 	gstomxmpeg4videodec.c \
 	gstomxmpeg2videodec.c \
+	gstomxh265dec.c \
 	gstomxh264dec.c \
 	gstomxh263dec.c \
 	gstomxwmvdec.c \
 	$(VP8_C_FILES) \
 	$(THEORA_C_FILES) \
 	gstomxmpeg4videoenc.c \
+	gstomxh265enc.c \
 	gstomxh264enc.c \
 	gstomxh263enc.c \
-	gstomxaacenc.c
+	gstomxaacenc.c \
+	gstomxtrace.c
 
 if USE_OMX_TARGET_TEGRA
 libgstomx_la_SOURCES += \
@@ -39,7 +42,9 @@ libgstomx_la_SOURCES += \
 	gstomxamrnbdec.c \
 	gstomxamrwbdec.c \
 	gstomxmpegaudiodec.c \
-	gstomxvp8enc.c
+	gstomxvp8enc.c \
+	gstomxvp9enc.c \
+	gstomxvp9dec.c
 endif
 
 noinst_HEADERS = \
@@ -50,15 +55,20 @@ noinst_HEADERS = \
 	gstomxmjpegdec.h \
 	gstomxmpeg2videodec.h \
 	gstomxmpeg4videodec.h \
+	gstomxh265dec.h \
 	gstomxh264dec.h \
 	gstomxh263dec.h \
 	gstomxwmvdec.h \
+	gstomxvp9dec.h \
 	$(VP8_H_FILES) \
 	$(THEORA_H_FILES) \
 	gstomxmpeg4videoenc.h \
+	gstomxh265enc.h \
+	gstomxvp9enc.h \
 	gstomxh264enc.h \
 	gstomxh263enc.h \
-	gstomxaacenc.h
+	gstomxaacenc.h \
+	gstomxtrace.h
 
 if USE_OMX_TARGET_TEGRA
 noinst_HEADERS += \
@@ -70,7 +80,8 @@ noinst_HEADERS += \
 	gstomxamrnbdec.h \
 	gstomxamrwbdec.h \
 	gstomxmpegaudiodec.h \
-	gstomxvp8enc.h
+	gstomxvp8enc.h \
+	gstomxvp9enc.h
 endif
 
 if !HAVE_EXTERNAL_OMX
@@ -78,6 +89,7 @@ OMX_INCLUDEPATH = -I$(abs_srcdir)/openmax
 endif
 
 libgstomx_la_CFLAGS = \
+	-DTEGRA_64 \
 	-DGST_USE_UNSTABLE_API=1 \
 	$(OMX_INCLUDEPATH) \
 	$(GST_EGL_CFLAGS) \

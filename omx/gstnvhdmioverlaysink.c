@@ -1,5 +1,5 @@
 /* GStreamer
- * Copyright (c) 2014, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -63,7 +63,8 @@ gst_nv_hdmi_overlay_sink_class_init (GstNvHDMIOverlaySinkClass * klass)
       "height = (int) [ 1, max ] , " "framerate = (fraction) [ 0, max ]";
 
   gst_element_class_set_static_metadata (GST_ELEMENT_CLASS (klass),
-      "OpenMax HDMI Video Sink", "Sink/Video", "Renders Video to HDMI",
+      "OpenMax HDMI Video Sink", "Sink/Video",
+      "Renders Video to HDMI (Deprecated - Use nvoverlaysink instead)",
       "Jitendra Kumar <jitendrak@nvidia.com>");
 
   gobject_class->set_property = gst_nv_hdmi_overlay_sink_set_property;
@@ -73,6 +74,8 @@ gst_nv_hdmi_overlay_sink_class_init (GstNvHDMIOverlaySinkClass * klass)
 static void
 gst_nv_hdmi_overlay_sink_init (GstNvHDMIOverlaySink * nvhdmioverlaysink)
 {
+  GstOmxVideoSink *omxvideosink = GST_OMX_VIDEO_SINK (nvhdmioverlaysink);
+  omxvideosink->dc_head = 1;
 }
 
 void

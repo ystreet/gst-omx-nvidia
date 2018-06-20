@@ -84,9 +84,6 @@ gst_omx_audio_dec_change_state (GstElement * element, GstStateChange transition)
       break;
   }
 
-  if (ret == GST_STATE_CHANGE_FAILURE)
-    return ret;
-
   ret =
       GST_ELEMENT_CLASS (gst_omx_audio_dec_parent_class)->change_state
       (element, transition);
@@ -484,12 +481,13 @@ gst_omx_audio_dec_loop (GstOMXAudioDec * self)
     goto flushing;
   }
 
-  GST_DEBUG_OBJECT (self, "Handling buffer: 0x%08x %" G_GUINT64_FORMAT,
-      (guint) buf->omx_buf->nFlags, (guint64) buf->omx_buf->nTimeStamp);
+  if (buf)
+    GST_DEBUG_OBJECT (self, "Handling buffer: 0x%08x %" G_GUINT64_FORMAT,
+        (guint) buf->omx_buf->nFlags, (guint64) buf->omx_buf->nTimeStamp);
 
   GST_AUDIO_DECODER_STREAM_LOCK (self);
 
-  if (buf->omx_buf->nFilledLen > 0) {
+  if (buf && buf->omx_buf->nFilledLen > 0) {
     GstBuffer *outbuf;
     GstMapInfo map = GST_MAP_INFO_INIT;
 
@@ -501,9 +499,10 @@ gst_omx_audio_dec_loop (GstOMXAudioDec * self)
 
     gst_buffer_map (outbuf, &map, GST_MAP_WRITE);
 
-    memcpy (map.data,
-        buf->omx_buf->pBuffer + buf->omx_buf->nOffset,
-        buf->omx_buf->nFilledLen);
+    if (map.data)
+      memcpy (map.data,
+          buf->omx_buf->pBuffer + buf->omx_buf->nOffset,
+          buf->omx_buf->nFilledLen);
     gst_buffer_unmap (outbuf, &map);
 
     GST_BUFFER_TIMESTAMP (outbuf) =

@@ -489,9 +489,11 @@ gst_omx_aac_enc_get_caps (GstOMXAudioEnc * enc, GstOMXPort * port,
     codec_data = gst_buffer_new_and_alloc (2);
     gst_buffer_map (codec_data, &map, GST_MAP_WRITE);
     sr_idx = map_adts_sample_index (aac_profile.nSampleRate);
-    map.data[0] = ((aac_profile.eAACProfile & 0x1F) << 3) |
-        ((sr_idx & 0xE) >> 1);
-    map.data[1] = ((sr_idx & 0x1) << 7) | ((aac_profile.nChannels & 0xF) << 3);
+    if (map.data) {
+      map.data[0] = ((aac_profile.eAACProfile & 0x1F) << 3) |
+          ((sr_idx & 0xE) >> 1);
+      map.data[1] = ((sr_idx & 0x1) << 7) | ((aac_profile.nChannels & 0xF) << 3);
+    }
     gst_buffer_unmap (codec_data, &map);
 
     GST_DEBUG_OBJECT (enc, "setting new codec_data");

@@ -2,7 +2,7 @@
  * Copyright (C) 2011, Hewlett-Packard Development Company, L.P.
  *   Author: Sebastian Dröge <sebastian.droege@collabora.co.uk>, Collabora Ltd.
  *
- * Copyright (c) 2015, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2015-2016, NVIDIA CORPORATION.  All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -36,10 +36,15 @@ static gboolean gst_omx_h264_dec_is_format_change (GstOMXVideoDec * dec,
     GstOMXPort * port, GstVideoCodecState * state);
 static gboolean gst_omx_h264_dec_set_format (GstOMXVideoDec * dec,
     GstOMXPort * port, GstVideoCodecState * state);
+static void gst_omx_h264_dec_loop (GstOMXBuffer * buf);
+static GstStateChangeReturn
+gst_omx_h264_dec_change_state (GstElement * element,
+    GstStateChange transition);
 
 enum
 {
-  PROP_0
+  PROP_0,
+  PROP_ENABLE_FRAME_TYPE_REPORTING
 };
 
 /* class initialization */
@@ -52,14 +57,53 @@ G_DEFINE_TYPE_WITH_CODE (GstOMXH264Dec, gst_omx_h264_dec,
     GST_TYPE_OMX_VIDEO_DEC, DEBUG_INIT);
 
 static void
+gst_omx_h264_dec_set_property (GObject * object,
+    guint prop_id, const GValue * value, GParamSpec * pspec)
+{
+  GstOMXVideoDec *self = GST_OMX_VIDEO_DEC (object);
+
+  switch (prop_id) {
+    case PROP_ENABLE_FRAME_TYPE_REPORTING:
+      self->enable_frame_type_reporting = g_value_get_boolean (value);
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+}
+
+static void
+gst_omx_h264_dec_get_property (GObject * object,
+    guint prop_id, GValue * value, GParamSpec * pspec)
+{
+  GstOMXVideoDec *self = GST_OMX_VIDEO_DEC (object);
+
+  switch (prop_id) {
+    case PROP_ENABLE_FRAME_TYPE_REPORTING:
+      g_value_set_boolean (value, self->enable_frame_type_reporting);
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+}
+
+static void
 gst_omx_h264_dec_class_init (GstOMXH264DecClass * klass)
 {
+  GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
   GstOMXVideoDecClass *videodec_class = GST_OMX_VIDEO_DEC_CLASS (klass);
   GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
 
   videodec_class->is_format_change =
       GST_DEBUG_FUNCPTR (gst_omx_h264_dec_is_format_change);
   videodec_class->set_format = GST_DEBUG_FUNCPTR (gst_omx_h264_dec_set_format);
+  videodec_class->video_dec_loop = GST_DEBUG_FUNCPTR (gst_omx_h264_dec_loop);
+  element_class->change_state =
+      GST_DEBUG_FUNCPTR (gst_omx_h264_dec_change_state);
+
+  gobject_class->set_property = gst_omx_h264_dec_set_property;
+  gobject_class->get_property = gst_omx_h264_dec_get_property;
 
   videodec_class->cdata.default_sink_template_caps = "video/x-h264, "
       "parsed=(boolean) true, "
@@ -72,6 +116,12 @@ gst_omx_h264_dec_class_init (GstOMXH264DecClass * klass)
       "Codec/Decoder/Video",
       "Decode H.264 video streams",
       "Sebastian Dröge <sebastian.droege@collabora.co.uk>");
+
+  g_object_class_install_property (gobject_class, PROP_ENABLE_FRAME_TYPE_REPORTING,
+      g_param_spec_boolean ("enable-frame-type-reporting",
+          "enable-frame-type-reporting",
+          "Set to enable frame type reporting",
+          FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   gst_omx_set_default_role (&videodec_class->cdata, "video_decoder.avc");
 }
@@ -177,12 +227,81 @@ gst_omx_h264_dec_set_format (GstOMXVideoDec * dec, GstOMXPort * port,
     gstomx_set_disable_dpb_property (omx_handle);
   }
 
-  if (dec->skip_frames != GST_DECODE_ALL) {
-    OMX_HANDLETYPE omx_handle = dec->dec->handle;
-    gst_omx_h264_dec_set_skip_frame (omx_handle, dec->skip_frames);
-  }
-
   ret = gst_omx_port_update_port_definition (port, &port_def) == OMX_ErrorNone;
 
   return ret;
+}
+
+static GstStateChangeReturn
+gst_omx_h264_dec_change_state (GstElement * element,
+    GstStateChange transition)
+{
+  GstOMXVideoDec * dec = GST_OMX_VIDEO_DEC (element);
+  GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
+
+  switch (transition) {
+    case GST_STATE_CHANGE_NULL_TO_READY:
+      break;
+    case GST_STATE_CHANGE_READY_TO_PAUSED:
+      break;
+    case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
+      if (dec->skip_frames != GST_DECODE_ALL) {
+        OMX_HANDLETYPE omx_handle = dec->dec->handle;
+        gst_omx_h264_dec_set_skip_frame (omx_handle, dec->skip_frames);
+      }
+      break;
+    case GST_STATE_CHANGE_PAUSED_TO_READY:
+      break;
+    default:
+      break;
+  }
+
+  ret =
+      GST_ELEMENT_CLASS (gst_omx_h264_dec_parent_class)->change_state
+      (element, transition);
+
+  return ret;
+}
+
+static void
+gst_omx_h264_dec_loop (GstOMXBuffer * buf)
+{
+  OMX_OTHER_EXTRADATATYPE *pExtraHeader =
+      gst_omx_buffer_get_extradata (buf, NVX_ExtraDataVideoDecOutput);
+
+  if (pExtraHeader
+      && (pExtraHeader->nDataSize ==
+          sizeof (NVX_VIDEO_DEC_OUTPUT_EXTRA_DATA))) {
+
+    NVX_VIDEO_DEC_OUTPUT_EXTRA_DATA *pNvxVideoDecOutputExtraData =
+        (NVX_VIDEO_DEC_OUTPUT_EXTRA_DATA *) (&pExtraHeader->data);
+
+    if (pNvxVideoDecOutputExtraData->nDecodeParamsFlag &
+        NVX_VIDEO_DEC_OUTPUT_PARAMS_FLAG_FRAME_DPB_REPORT) {
+
+      switch (pNvxVideoDecOutputExtraData->codecData.h264Data.PicType) {
+        case OMX_VIDEO_PictureTypeI:
+          if (pNvxVideoDecOutputExtraData->codecData.h264Data.sDecDpbReport.
+              currentFrame.bIdrFrame) {
+            buf->Video_Meta.VideoDecMeta.dec_frame_type = IDR_FRAME;
+          } else {
+            buf->Video_Meta.VideoDecMeta.dec_frame_type = I_FRAME;
+          }
+          break;
+        case OMX_VIDEO_PictureTypeP:
+        {
+          buf->Video_Meta.VideoDecMeta.dec_frame_type = P_FRAME;
+        }
+          break;
+        case OMX_VIDEO_PictureTypeB:
+        {
+          buf->Video_Meta.VideoDecMeta.dec_frame_type = B_FRAME;
+        }
+          break;
+        default:
+          g_print ("Decoded Frame is other than I/P/B\n");
+          break;
+      }
+    }
+  }
 }

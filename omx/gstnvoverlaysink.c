@@ -1,5 +1,5 @@
 /* GStreamer
- * Copyright (c) 2013, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2013-2015, NVIDIA CORPORATION.  All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -38,8 +38,11 @@ static void gst_nv_overlay_sink_get_property (GObject * object,
 
 enum
 {
-  PROP_0
+  PROP_0,
+  PROP_DISPLAY
 };
+
+#define DEFAULT_DC_HEAD        0
 
 /* class initialization */
 
@@ -68,11 +71,21 @@ gst_nv_overlay_sink_class_init (GstNvOverlaySinkClass * klass)
 
   gobject_class->set_property = gst_nv_overlay_sink_set_property;
   gobject_class->get_property = gst_nv_overlay_sink_get_property;
+
+  /*
+   *  Display Id
+   */
+  g_object_class_install_property (gobject_class, PROP_DISPLAY,
+      g_param_spec_uint ("display-id", "Display Id",
+          "Display on which overlay should be rendered", 0, G_MAXUINT,
+          DEFAULT_DC_HEAD, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 }
 
 static void
 gst_nv_overlay_sink_init (GstNvOverlaySink * nvoverlaysink)
 {
+  GstOmxVideoSink *omxvideosink = GST_OMX_VIDEO_SINK (nvoverlaysink);
+  omxvideosink->dc_head = DEFAULT_DC_HEAD;
 }
 
 void
@@ -80,8 +93,12 @@ gst_nv_overlay_sink_set_property (GObject * object, guint property_id,
     const GValue * value, GParamSpec * pspec)
 {
   /* GstNvOverlaySink *nvoverlaysink = GST_NV_OVERLAY_SINK (object); */
+  GstOmxVideoSink *omxvideosink = GST_OMX_VIDEO_SINK (object);
 
   switch (property_id) {
+    case PROP_DISPLAY:
+      omxvideosink->dc_head = g_value_get_uint (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
       break;
@@ -93,8 +110,12 @@ gst_nv_overlay_sink_get_property (GObject * object, guint property_id,
     GValue * value, GParamSpec * pspec)
 {
   /* GstNvOverlaySink *nvoverlaysink = GST_NV_OVERLAY_SINK (object); */
+  GstOmxVideoSink *omxvideosink = GST_OMX_VIDEO_SINK (object);
 
   switch (property_id) {
+    case PROP_DISPLAY:
+      g_value_set_uint (value, omxvideosink->dc_head);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
       break;

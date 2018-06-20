@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2011, Hewlett-Packard Development Company, L.P.
  *   Author: Sebastian Dröge <sebastian.droege@collabora.co.uk>, Collabora Ltd.
- * Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2014-2017, NVIDIA CORPORATION.  All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -25,6 +25,7 @@
 #include <gst/gst.h>
 #include <gst/video/video.h>
 #include <gst/video/gstvideoencoder.h>
+#include <stdio.h>
 
 #include "gstomx.h"
 
@@ -73,12 +74,35 @@ struct _GstOMXVideoEnc
   gboolean hw_path;
 
   /* properties */
-  guint32 rc_mode;
+  guint32 control_rate;
   guint32 bitrate;
+  guint32 peak_bitrate;
   guint32 quant_i_frames;
   guint32 quant_p_frames;
   guint32 quant_b_frames;
   guint32 iframeinterval;
+  guint32 quality_level;
+  gboolean SliceIntraRefreshEnable;
+  gboolean bit_packetization;
+  guint SliceIntraRefreshInterval;
+  gboolean vbv_size_factor;
+  guint32 temporal_tradeoff;
+  guint32 max_frame_dist;
+  gboolean EnableMVBufferMeta;
+  guint32 MinQpI;
+  guint32 MaxQpI;
+  guint32 MinQpP;
+  guint32 MaxQpP;
+  guint32 MinQpB;
+  guint32 MaxQpB;
+  gboolean set_qpRange;
+  gboolean measure_latency;
+  guint64 framecount;
+  FILE *tracing_file_enc;
+  GQueue *got_frame_pt;
+  gboolean EnableTwopassCBR;
+  guint32 hw_preset_level;
+  gboolean EnableStringentBitrate;
 
   GstFlowReturn downstream_flow_ret;
 };
@@ -95,6 +119,8 @@ struct _GstOMXVideoEncClass
       GstVideoCodecState * state);
     GstFlowReturn (*handle_output_frame) (GstOMXVideoEnc * self,
       GstOMXPort * port, GstOMXBuffer * buffer, GstVideoCodecFrame * frame);
+
+  void (*force_IDR) (GstOMXVideoEnc *);
 };
 
 GType gst_omx_video_enc_get_type (void);

@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2011, Hewlett-Packard Development Company, L.P.
  *   Author: Sebastian Dröge <sebastian.droege@collabora.co.uk>, Collabora Ltd.
- * Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2014-2017, NVIDIA CORPORATION.  All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -56,6 +56,11 @@ struct _GstOMXH264Enc
   GstOMXVideoEnc parent;
   h264_sf stream_format;
   gboolean insert_sps_pps;
+  gboolean nBFrames;
+  glong slice_header_spacing;
+  guint profile;
+  gboolean insert_aud;
+  gboolean insert_vui;
 };
 
 struct _GstOMXH264EncClass

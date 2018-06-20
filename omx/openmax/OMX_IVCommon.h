@@ -132,6 +132,14 @@ typedef enum OMX_COLOR_FORMATTYPE {
     OMX_COLOR_Format24BitABGR6666,
     OMX_COLOR_FormatKhronosExtensions = 0x6F000000, /**< Reserved region for introducing Khronos Standard Extensions */ 
     OMX_COLOR_FormatVendorStartUnused = 0x7F000000, /**< Reserved region for introducing Vendor Extensions */
+
+    OMX_COLOR_Format10bitYUV420SemiPlanar = 0x7FF00100,
+    OMX_COLOR_Format10bitYUV420Planar     = 0x7FF00101,
+    OMX_COLOR_Format8bitYUV444SemiPlanar  = 0x7FF00102,
+    OMX_COLOR_Format8bitYUV444Planar      = 0x7FF00103,
+    OMX_COLOR_Format10bitYUV444SemiPlanar = 0x7FF00104,
+    OMX_COLOR_Format10bitYUV444Planar     = 0x7FF00105,
+
     OMX_COLOR_FormatMax = 0x7FFFFFFF
 } OMX_COLOR_FORMATTYPE;
 

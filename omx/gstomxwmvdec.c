@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2011, Hewlett-Packard Development Company, L.P.
  *   Author: Sebastian Dröge <sebastian.droege@collabora.co.uk>, Collabora Ltd.
- * Copyright (c) 2014, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -122,35 +122,37 @@ gst_omx_wmv_dec_set_format (GstOMXVideoDec * dec, GstOMXPort * port,
     /*openmax decoder want first byte to be skipped */
     gst_buffer_resize (buf, 1, -1);
     gst_buffer_replace (&state->codec_data, buf);
-    g_print ("New buffer size = %d\n", gst_buffer_get_size (buf));
+    g_print ("New buffer size = %zu\n", gst_buffer_get_size (buf));
   } else if (size > 3) {
     gst_buffer_map (state->codec_data, &read_map, GST_MAP_READ);
-    if (read_map.data[3] != 0xc5) {
-      //Lets code Annex J and L of the SMPTE VC-1 specification
-      char seq_l1[] = { 0xff, 0xff, 0xff, 0xc5 };
-      char seq_l2[] = { 0x4, 0, 0, 0 };
-      char seq_l3[] = { 0xc, 0, 0, 0 };
+    if (read_map.data) {
+      if (read_map.data[3] != 0xc5) {
+        //Lets code Annex J and L of the SMPTE VC-1 specification
+        char seq_l1[] = { 0xff, 0xff, 0xff, 0xc5 };
+        char seq_l2[] = { 0x4, 0, 0, 0 };
+        char seq_l3[] = { 0xc, 0, 0, 0 };
 
-      gst_structure_get_int (structure, "width", &width);
-      gst_structure_get_int (structure, "height", &height);
+        gst_structure_get_int (structure, "width", &width);
+        gst_structure_get_int (structure, "height", &height);
 
-      buf = gst_buffer_new_allocate (NULL, size + 32, NULL);
-      gst_buffer_map (buf, &write_map, GST_MAP_WRITE);
-      memcpy (write_map.data + index, seq_l1, 4);
-      index += 4;
-      memcpy (write_map.data + index, seq_l2, 4);
-      index += 4;
-      memcpy (write_map.data + index, read_map.data, 4);
-      index += 4;
-      memcpy (write_map.data + index, &height, 4);
-      index += 4;
-      memcpy (write_map.data + index, &width, 4);
-      index += 4;
-      memcpy (write_map.data + index, seq_l3, 4);
-      index += 4;
-      memset (write_map.data + index, 0, 12);
-      gst_buffer_replace (&state->codec_data, buf);
-      gst_buffer_unmap (buf, &write_map);
+        buf = gst_buffer_new_allocate (NULL, size + 32, NULL);
+        gst_buffer_map (buf, &write_map, GST_MAP_WRITE);
+        memcpy (write_map.data + index, seq_l1, 4);
+        index += 4;
+        memcpy (write_map.data + index, seq_l2, 4);
+        index += 4;
+        memcpy (write_map.data + index, read_map.data, 4);
+        index += 4;
+        memcpy (write_map.data + index, &height, 4);
+        index += 4;
+        memcpy (write_map.data + index, &width, 4);
+        index += 4;
+        memcpy (write_map.data + index, seq_l3, 4);
+        index += 4;
+        memset (write_map.data + index, 0, 12);
+        gst_buffer_replace (&state->codec_data, buf);
+        gst_buffer_unmap (buf, &write_map);
+      }
     }
     gst_buffer_unmap (state->codec_data, &read_map);
   }
@@ -175,22 +177,23 @@ gst_omx_wmv_dec_prepare_frame (GstOMXVideoDec * dec, GstVideoCodecFrame * frame)
   if (self->wvc1) {
     //Handle WVC1 format
     gst_buffer_map (frame->input_buffer, &read_map, GST_MAP_READ);
-    start_code =
-        (read_map.data[0] << 24) | (read_map.data[1] << 16) | (read_map.
-        data[2] << 8) | read_map.data[3];
-    gst_buffer_unmap (frame->input_buffer, &read_map);
+    if (read_map.data) {
+      start_code =
+          (read_map.data[0] << 24) | (read_map.data[1] << 16) | (read_map.
+          data[2] << 8) | read_map.data[3];
+      gst_buffer_unmap (frame->input_buffer, &read_map);
 
-    if (start_code != 0x10D && start_code != 0x10E) {
-      mem = gst_allocator_alloc (NULL, 4, NULL);
-      gst_memory_map (mem, &write_map, GST_MAP_WRITE);
-      write_map.data[0] = 0;
-      write_map.data[1] = 0;
-      write_map.data[2] = 1;
-      write_map.data[3] = 0xD;
-      gst_memory_unmap (mem, &write_map);
-      gst_buffer_prepend_memory (frame->input_buffer, mem);
+      if (start_code != 0x10D && start_code != 0x10E) {
+        mem = gst_allocator_alloc (NULL, 4, NULL);
+        gst_memory_map (mem, &write_map, GST_MAP_WRITE);
+        write_map.data[0] = 0;
+        write_map.data[1] = 0;
+        write_map.data[2] = 1;
+        write_map.data[3] = 0xD;
+        gst_memory_unmap (mem, &write_map);
+        gst_buffer_prepend_memory (frame->input_buffer, mem);
+      }
     }
-
   }
   return GST_FLOW_OK;
 }

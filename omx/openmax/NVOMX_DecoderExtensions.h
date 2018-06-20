@@ -1,4 +1,4 @@
-/* Copyright (c) 2009-2013 NVIDIA CORPORATION.  All rights reserved.
+/* Copyright (c) 2009-2016 NVIDIA CORPORATION.  All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -140,6 +140,29 @@ typedef struct NVX_PARAM_H264DISABLE_DPB {
     OMX_BOOL bDisableDPB;           /**< Boolean to disable DPB logic of H264 */
 } NVX_PARAM_H264DISABLE_DPB;
 
+/** Param extension index to disable DPB logic for H265 in case client knows that
+ *  decode and display order are same. Don't use this for other cases.
+ *  See ::NVX_PARAM_H265DISABLE_DPB
+ */
+#define NVX_INDEX_PARAM_H265_DISABLE_DPB "OMX.Nvidia.index.param.h265disabledpb"
+typedef struct NVX_PARAM_H265DISABLE_DPB {
+    OMX_U32 nSize;                  /**< Size of the structure in bytes */
+    OMX_VERSIONTYPE nVersion;       /**< NVX extensions specification version information */
+    OMX_BOOL bDisableDPB;           /**< Boolean to disable DPB logic of H265 */
+} NVX_PARAM_H265DISABLE_DPB;
+
+/** Param extension index to Set Max Resolution in case client knows that
+ *  there is DRC happening in stream and client wants to avoid memory allocation according to DRC
+ *  Don't use this for other cases.
+ *  See ::NVX_PARAM_SETMAXRES
+ */
+#define NVX_INDEX_PARAM_SET_MAX_RES "OMX.Nvidia.index.param.setmaxres"
+typedef struct NVX_PARAM_SETMAXRES {
+    OMX_U32 nSize;                  /**< Size of the structure in bytes */
+    OMX_VERSIONTYPE nVersion;       /**< NVX extensions specification version information */
+    OMX_BOOL bSetMaxRes;           /**< Boolean to disable Setting of max resolution */
+} NVX_PARAM_SETMAXRES;
+
 /** Config extension index to enable ultra low power mode.
  *  See ::NVX_CONFIG_ULPMODE
  */
@@ -210,6 +233,16 @@ typedef struct
     OMX_U32 nPortIndex;             /**< Port that this struct applies to */
     OMX_U32 DeinterlaceMethod;      /**< Deinterlace method, see ::OMX_DeinterlaceMethod */
 }NVX_PARAM_DEINTERLACE;
+
+/** Param extension index to enable error status reporting for decoder
+ *  See ::OMX_CONFIG_BOOLEANTYPE
+ */
+#define NVX_INDEX_PARAM_VIDEO_DEC_ERROR_STATS_REPORTING "OMX.Nvidia.index.param.videodec_error_stats_reporting"
+
+/** Param extension index to enable dumping of motion vector for decoder
+ *  See ::OMX_CONFIG_BOOLEANTYPE
+ */
+#define NVX_INDEX_PARAM_VIDEO_DUMPMV "OMX.Nvidia.index.param.videodec_dump_mv"
 
 /* JPG decoder extensions */
 
@@ -354,10 +387,13 @@ typedef struct NVX_PARAM_SURFACELAYOUT
 #define NVX_INDEX_CONFIG_MAXOUTPUTCHANNELS \
     "OMX.Nvidia.index.config.maxoutchannels"
 
-/** Nvidia specific extended audio coding types **/
+/** Nvidia specific extended audio coding types
+    and align as per OMX_AudioExt.h   **/
 typedef enum NVX_AUDIO_CODINGTYPE {
-    NVX_AUDIO_CodingAC3 = (OMX_AUDIO_CodingVendorStartUnused + 1), /**< Any variant of AC3 encoded data */
-    NVX_AUDIO_CodingDTS = (OMX_AUDIO_CodingVendorStartUnused + 2), /**< Any variant of DTS encoded data */
+    NVX_AUDIO_CodingUnused = OMX_AUDIO_CodingKhronosExtensions + 0x00100000,
+    NVX_AUDIO_CodingAC3,         /**< AC3 encoded data */
+    NVX_AUDIO_CodingOPUS,        /**< OPUS encoded data */
+    NVX_AUDIO_CodingDTS,
 } NVX_AUDIO_CODINGTYPE;
 
 /** AC3 params */
@@ -402,6 +438,8 @@ typedef struct NVX_AUDIO_CONFIG_CAPS {
  */
 #define NVX_INDEX_CONFIG_AUDIO_CAPS "OMX.Nvidia.index.config.audio_caps"
 
+#define NVX_INDEX_CONFIG_EAC3_SUPPORTED  "OMX.Nvidia.index.config.eac3_supported"
+
 /* OMX extension index to set  silence output of audio decoder */
 /**< reference: NVX_INDEX_CONFIG_AUDIO_SILENCE_OUTPUT
  * Use OMX_CONFIG_BOOLEANTYPE
@@ -420,6 +458,40 @@ typedef struct NVX_AUDIO_CONFIG_CAPS {
 */
 #define NVX_INDEX_CONFIG_THUMBNAIL_MODE "OMX.Nvidia.index.config.thumbnailMode"
 
+/* Openmax component enable video decode FRC*/
+/**< reference: NVX_INDEX_CONFIG_ENABLE_VIDEO_FRC
+ * Use OMX_CONFIG_BOOLEANTYPE
+*/
+#define NVX_INDEX_CONFIG_ENABLE_VIDEO_FRC "OMX.Nvidia.index.config.videoFrc"
+
+/* Openmax component identify cts test cases*/
+/**< reference: NVX_INDEX_CONFIG_NO_POST_PROCESSING
+ * Use OMX_CONFIG_BOOLEANTYPE
+*/
+#define NVX_INDEX_CONFIG_NO_POST_PROCESSING "OMX.Nvidia.index.config.noPostProcessing"
+
+/** Param extension index to set the dps size for the decoder
+ *  See: NVX_INDEX_PARAM_VIDEO_DEC_H264_DPB_SIZE
+ */
+#define NVX_INDEX_PARAM_VIDEO_DEC_H264_DPB_SIZE "OMX.Nvidia.index.param.vdech264dpbsize"
+
+#define NVX_INDEX_PARAM_VIDEO_DEC_CPU_BUF "OMX.Nvidia.index.param.videodeccpubuf"
+
+/** Nvidia specific DPB size type settings **/
+typedef enum
+{
+    NVX_VIDEO_DEC_DEFAULT_DPB                    = 0, /**< DPB size calculated by decoder is used. Recommended*/
+    NVX_VIDEO_DEC_DPB_SIZE_USING_MAX_REF_PIC_NUM = 1, /**< DPB size calculated using max_num_ref_frame of SPS */
+    NVX_VIDEO_DEC_DPB_SIZE_APPLICATION_PROVIDED  = 2, /**< Use Application provided DPB size when aplication has prior knowledge of DPB size*/
+} NVX_VIDEO_DEC_H264_DPB_SIZE_TYPES;
+
+typedef struct NVX_VIDEO_PARAM_H264_DPB_SIZE {
+    OMX_U32 nSize;                  /**< Size of the structure in bytes */
+    OMX_VERSIONTYPE nVersion;       /**< NVX extensions specification version information */
+    OMX_U32 DpbSizeType;            /**< Defined using NVX_VIDEO_DEC_H264_DPB_SIZE_TYPES enum */
+    OMX_U32 AppDpbSize;             /**< Used when NVX_VIDEO_DEC_DPB_SIZE_APPLICATION_PROVIDED is selected */
+} NVX_VIDEO_PARAM_H264_DPB_SIZE;
+
 
 /**
  * Added to protect slice based decoding.
@@ -431,6 +503,168 @@ typedef struct NVX_VIDEO_PARAM_SLICE_DECODE {
     OMX_U32 nAuthentication;
     OMX_BOOL bEnabled;
 } NVX_VIDEO_PARAM_SLICE_DECODE;
+
+
+typedef enum NVX_VIDEO_DEC_OUTPUT_FRAME_PARAMS_FLAGS {
+    NVX_VIDEO_DEC_OUTPUT_PARAMS_FLAG_FRAME_DEC_ERR_REPORT      = (1<<0),
+    NVX_VIDEO_DEC_OUTPUT_PARAMS_FLAG_FRAME_MASTERING_DISP_DATA = (1<<1),
+    NVX_VIDEO_DEC_OUTPUT_PARAMS_FLAG_FRAME_DPB_REPORT          = (1<<2),
+} NVX_VIDEO_DEC_OUTPUT_FRAME_PARAMS_FLAGS;
+
+typedef struct NVX_MASTERING_DISPLAY_DATA
+{
+    // idx 0 : G, 1 : B, 2 : R
+    OMX_U16 display_primaries_x[3];       // normalized x chromaticity cordinate. It shall be in the range of 0 to 50000
+    OMX_U16 display_primaries_y[3];       // normalized y chromaticity cordinate. It shall be in the range of 0 to 50000
+    OMX_U16 white_point_x;    // normalized x chromaticity cordinate of white point of mastering display
+    OMX_U16 white_point_y;    // normalized y chromaticity cordinate of white point of mastering display
+    OMX_U32 max_display_parameter_luminance;      // nominal maximum display luminance in units of 0.0001 candelas per square metre
+    OMX_U32 min_display_parameter_luminance;      // nominal minimum display luminance in units of 0.0001 candelas per square metre
+} NVX_MASTERING_DISPLAY_DATA;
+
+
+/* Structures for DPB report from H264 and HEVC video decoder.
+   These will be part of codecData in NVX_VIDEO_DEC_OUTPUT_EXTRA_DATA.
+*/
+#define DEC_MAX_REF_FRAMES 16
+
+typedef struct NVOMX_DecRefFrame {
+    OMX_BOOL bPresent;          // present in DPB
+    OMX_BOOL bIdrFrame;         // Is an IDR
+    OMX_BOOL bLTRefFrame;       // Long Term Ref Flag
+    OMX_BOOL bPredicted;        // This frame is motion predicted for current frame as specified in slice header
+    OMX_U32 nPictureOrderCnt;   // POC
+    OMX_U32 nFrameNum;          // FrameNum
+    OMX_U32 nLTRFrameIdx;       // LongTermFrameIdx of a picture
+} NVOMX_DecRefFrame;
+
+typedef struct NVOMX_DecCurrentFrame {
+    OMX_BOOL bRefFrame;            // current frame referenced or non-referenced
+    OMX_BOOL bIdrFrame;            // Is an IDR
+    OMX_BOOL bLTRefFrame;          // Long Term Ref Flag
+    OMX_U32 nPictureOrderCnt;      // POC
+    OMX_U32 nFrameNum;             // FrameNum
+    OMX_U32 nLTRFrameIdx;          // LongTermFrameIdx of a picture
+} NVOMX_DecCurrentFrame;
+
+typedef struct NVX_VIDEO_DEC_DPB_REPORT {
+    NVOMX_DecCurrentFrame currentFrame;           // property of current decoded frame
+    OMX_U32 nActiveRefFrames;                     // # of valid entries in RPS
+    NVOMX_DecRefFrame RPSList[DEC_MAX_REF_FRAMES];  // RPS List as signaled in slice header excluding current frame, only first nActiveRefFrames are valid. This can be different from list of frames in current DPB due to frame loss.
+} NVX_VIDEO_DEC_DPB_REPORT;
+
+/* VIDEO Decoder error types information when Output buffer is returned back to client
+ * Each bit of nDecodeError field of NVX_VIDEO_DEC_ERR_REPORT from NVX_VIDEO_DEC_OUTPUT_EXTRA_DATA
+ * will indicate the type of error in the decoded frame.
+ * */
+typedef enum {
+    VIDEO_DEC_DECODED_ERROR_NONE                =  (0<<0),
+    VIDEO_DEC_DECODED_ERROR_FATAL               =  (1<<0),
+    VIDEO_DEC_DECODED_ERROR_MB_SYNTAX           =  (1<<1),
+    VIDEO_DEC_DECODED_ERROR_MISSING_SLICE       =  (1<<2),
+    VIDEO_DEC_DECODED_ERROR_PREV_FRAME_LOST     =  (1<<3)
+}NVX_VIDEO_DEC_OutputErrorTypes;
+
+/* Struct for video decode error report */
+typedef struct NVX_VIDEO_DEC_ERR_REPORT
+{
+    OMX_U32  nDecodeError;        /* Usage as per NVX_VIDEO_DEC_OutputErrorTypes enum*/
+    OMX_U32  nDecodedMBs;         /* No. of correctly decoded MBs by HW. nDecodedMBs < Max Mbs in frame => Error while decoding.*/
+    OMX_U32  nConcealedMBs;       /* No. of concealed MBs in case of error. nConcealedMBs != 0 => Concealmeant applied. */
+    OMX_U32  nConcealedFromPOC;   /* POC of the frame used as reference for concealment/as substituted reference.
+                                   * Valid if nConcealedMBs != 0 or VIDEO_DEC_ERROR_MISSING_REF_FRAME is set in nBitStreamError.
+                                   */
+    OMX_U32  nFrameDecodeTime;     /* Frame decode time in microseconds */
+}NVX_VIDEO_DEC_ERR_REPORT;
+
+typedef enum {
+    NVX_B_Type,
+    NVX_P_forward_Type,
+    NVX_P_backward_Type,
+    NVX_I_Type
+} NVX_MACROBLOCK_TYPE;
+
+/** Motion Vector struct for macro block */
+typedef struct _NVX_MOTION_VECTOR_MB_METADATA {
+    OMX_U16 mbNum;
+    OMX_U8 MBType;    // values from NvMacroBlockType
+    OMX_S16 for_x;
+    OMX_S16 for_y;
+    OMX_S16 bac_x;
+    OMX_S16 bac_y;
+} NVX_MOTION_VECTOR_MB_METADATA;
+
+/** Motion Vector struct for frame */
+typedef struct _NVX_MOTION_VECTOR_FRAME_METADATA {
+    OMX_U32 frameNumDecodeOrder;
+    OMX_U32 mbCount;
+    OMX_BOOL bMVDumpPresent;
+    NVX_MOTION_VECTOR_MB_METADATA *mv;
+} NVX_MOTION_VECTOR_FRAME_METADATA;
+
+/** Metadata from VP8 decoder buffers as f/b */
+typedef struct NVX_VIDEO_DEC_VP8_BUFFER_METADATA
+{
+    OMX_U32  PicId;
+    OMX_BOOL bSetAsGoldenRef;
+    OMX_BOOL bSetAsAltRef;
+    OMX_BOOL bSetAsPrevRef;
+} NVX_VIDEO_DEC_VP8_BUFFER_METADATA;
+
+/** Metadata from H264 decoder buffers as f/b */
+typedef struct NVX_VIDEO_DEC_H264_BUFFER_METADATA
+{
+    OMX_U32 nFrameNumBits;
+    OMX_VIDEO_PICTURETYPE PicType;
+    NVX_VIDEO_DEC_DPB_REPORT sDecDpbReport;
+    NVX_MOTION_VECTOR_FRAME_METADATA mvf;
+} NVX_VIDEO_DEC_H264_BUFFER_METADATA;
+
+/** Metadata from HEVC decoder buffers as f/b */
+typedef struct NVX_VIDEO_DEC_HEVC_BUFFER_METADATA
+{
+    OMX_U32 nPocLsbBits;
+    OMX_VIDEO_PICTURETYPE PicType;
+    NVX_VIDEO_DEC_DPB_REPORT sDecDpbReport;
+    NVX_MOTION_VECTOR_FRAME_METADATA mvf;
+} NVX_VIDEO_DEC_HEVC_BUFFER_METADATA;
+
+typedef struct NVX_VIDEO_DEC_OUTPUT_EXTRA_DATA {
+    OMX_U32 nSize;                /* Size of the structure in bytes */
+    OMX_VERSIONTYPE nVersion;     /* version information */
+    OMX_U32 nDecodeParamsFlag;   /* Flag to indicate type of extra data present */
+    /* parameter for rate control */
+    NVX_MASTERING_DISPLAY_DATA MasteringDispData; /**< Display mastering data */
+    /* Decoder error report */
+    NVX_VIDEO_DEC_ERR_REPORT sDecErrReport;
+    /* Any other frame level parameters */
+    union {
+        NVX_VIDEO_DEC_VP8_BUFFER_METADATA vp8Data;
+        NVX_VIDEO_DEC_H264_BUFFER_METADATA h264Data;
+        NVX_VIDEO_DEC_HEVC_BUFFER_METADATA hevcData;
+    }codecData;
+    OMX_U8  data[1];     /* Supporting data hint, it should be the last member in this struct */
+} NVX_VIDEO_DEC_OUTPUT_EXTRA_DATA;
+
+/* VIDEO Decoder error types information when Input buffer is returned back to client
+ * Each bit of nBitStreamError field of NVX_VIDEO_DEC_INPUT_EXTRA_DATA will indicate the type of error in stream
+ * */
+typedef enum {
+    VIDEO_DEC_INBUF_ERROR_NONE              =  (0<<0),
+    VIDEO_DEC_INBUF_ERROR_SPS               =  (1<<0),
+    VIDEO_DEC_INBUF_ERROR_PPS               =  (1<<1),
+    VIDEO_DEC_INBUF_ERROR_SLICE_HDR         =  (1<<2),
+    VIDEO_DEC_INBUF_ERROR_MISSING_REF_FRAME =  (1<<3),
+    VIDEO_DEC_INBUF_ERROR_VPS               =  (1<<4)
+}NVX_VIDEO_DEC_InputErrorTypes;
+
+/* Video Dec input extra data is used for returning SPS/PPS errors*/
+typedef struct NVX_VIDEO_DEC_INPUT_EXTRA_DATA {
+    OMX_U32 nSize;                /* Size of the structure in bytes */
+    OMX_VERSIONTYPE nVersion;     /* version information */
+    /* Bits represent error status for header parsing*/
+    OMX_U32 nBitStreamError;      /* Usage as per NVX_VIDEO_DEC_InputErrorTypes enum */
+} NVX_VIDEO_DEC_INPUT_EXTRA_DATA;
 
 #endif
 /** @} */

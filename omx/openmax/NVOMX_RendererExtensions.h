@@ -1,4 +1,4 @@
-/* Copyright (c) 2009 - 2013 NVIDIA Corporation.  All rights reserved.
+/* Copyright (c) 2009 - 2015 NVIDIA Corporation.  All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -290,7 +290,7 @@ typedef struct NVX_CONFIG_OVERLAYINDEX
     OMX_U32 index;
 } NVX_CONFIG_OVERLAYINDEX;
 
-/** Config extension index to allow window mode on secondary displays
+/** Param extension index to allow window mode on secondary displays
  *  See ::NVX_CONFIG_ALLOWSECONDARYWINDOW
  */
 #define NVX_INDEX_CONFIG_ALLOWSECONDARYWINDOW "OMX.Nvidia.index.config.allowsecondarywindow"
@@ -303,6 +303,20 @@ typedef struct NVX_CONFIG_ALLOWSECONDARYWINDOW
     OMX_U32 nPortIndex;                 /**< Port that this struct applies to */
     OMX_BOOL bAllow;
 } NVX_CONFIG_ALLOWSECONDARYWINDOW;
+
+/** Param extension index to set dc_head for overlay
+ *  See ::NVX_PARAM_OVERLAYDCHEAD
+ */
+#define NVX_INDEX_PARAM_OVERLAYDCHEAD "OMX.Nvidia.index.param.overlaydchead"
+
+/** Holds data to set the dc head value for overlay */
+typedef struct NVX_PARAM_OVERLAYDCHEAD
+{
+    OMX_U32 nSize;
+    OMX_VERSIONTYPE nVersion;
+    OMX_U32 nPortIndex;                 /**< Port that this struct applies to */
+    OMX_BOOL nOverlayDcHead;
+} NVX_PARAM_OVERLAYDCHEAD;
 
 /** @} */
 

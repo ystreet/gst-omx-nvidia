@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2011, Hewlett-Packard Development Company, L.P.
  *   Author: Sebastian Dröge <sebastian.droege@collabora.co.uk>, Collabora Ltd.
+ * Copyright (c) 2016, NVIDIA CORPORATION.  All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -410,9 +411,11 @@ gst_omx_audio_enc_loop (GstOMXAudioEnc * self)
     codec_data = gst_buffer_new_and_alloc (buf->omx_buf->nFilledLen);
 
     gst_buffer_map (codec_data, &map, GST_MAP_WRITE);
-    memcpy (map.data,
-        buf->omx_buf->pBuffer + buf->omx_buf->nOffset,
-        buf->omx_buf->nFilledLen);
+    if (map.data) {
+      memcpy (map.data,
+          buf->omx_buf->pBuffer + buf->omx_buf->nOffset,
+          buf->omx_buf->nFilledLen);
+    }
     gst_buffer_unmap (codec_data, &map);
 
     gst_caps_set_simple (caps, "codec_data", GST_TYPE_BUFFER, codec_data, NULL);
@@ -440,10 +443,11 @@ gst_omx_audio_enc_loop (GstOMXAudioEnc * self)
       outbuf = gst_buffer_new_and_alloc (buf->omx_buf->nFilledLen);
 
       gst_buffer_map (outbuf, &map, GST_MAP_WRITE);
-
-      memcpy (map.data,
-          buf->omx_buf->pBuffer + buf->omx_buf->nOffset,
-          buf->omx_buf->nFilledLen);
+      if (map.data) {
+        memcpy (map.data,
+            buf->omx_buf->pBuffer + buf->omx_buf->nOffset,
+            buf->omx_buf->nFilledLen);
+      }
       gst_buffer_unmap (outbuf, &map);
 
     } else {
@@ -632,7 +636,7 @@ gst_omx_audio_enc_set_format (GstAudioEncoder * encoder, GstAudioInfo * info)
   gboolean needs_disable = FALSE;
   OMX_PARAM_PORTDEFINITIONTYPE port_def;
   OMX_AUDIO_PARAM_PCMMODETYPE pcm_param;
-  gint i;
+  guint i;
   OMX_ERRORTYPE err;
 
   self = GST_OMX_AUDIO_ENC (encoder);

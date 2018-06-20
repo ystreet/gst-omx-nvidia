@@ -3,7 +3,7 @@
  *   Author: Sebastian Dröge <sebastian.droege@collabora.co.uk>, Collabora Ltd.
  * Copyright (C) 2013, Collabora Ltd.
  *   Author: Sebastian Dröge <sebastian.droege@collabora.co.uk>
- * Copyright (c) 2013 - 2015, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2013 - 2018, NVIDIA CORPORATION.  All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -28,6 +28,9 @@
 #include <gst/gst.h>
 #include <gst/video/gstvideometa.h>
 #include <gst/video/gstvideopool.h>
+#ifdef HAVE_IVA_META
+#include "gstnvivameta_api.h"
+#endif
 
 #if defined (USE_OMX_TARGET_RPI) && defined(__GNUC__)
 #ifndef __VCCOREVER__
@@ -49,7 +52,6 @@
 #endif
 
 #include <string.h>
-
 #include "gstomxvideodec.h"
 
 GST_DEBUG_CATEGORY_STATIC (gst_omx_video_dec_debug_category);
@@ -83,6 +85,7 @@ struct _GstOMXMemoryAllocatorClass
 #define GST_OMX_MEMORY_TYPE "openmax"
 #define GST_OMX_SINK_MEMORY_TYPE "omxsink"
 
+#define DEFAULT_OUTPUT_BUFFER 0
 #define DEFAULT_SKIP_FRAME_TYPE GST_DECODE_ALL
 #define GST_TYPE_OMX_VID_DEC_SKIP_FRAMES (gst_video_dec_skip_frames ())
 static GType
@@ -322,9 +325,10 @@ gst_omx_buffer_pool_stop (GstBufferPool * bpool)
   guint i;
 
   /* Remove any buffers that are there */
-  for (i = 0; i < pool->port->buffers->len; i++) {
+  for (i = 0; i < pool->buffers->len; i++) {
     buf = g_ptr_array_index (pool->buffers, i);
-    gst_omx_buffer_pool_free_buffer (bpool, buf);
+    GST_BUFFER_POOL_CLASS (gst_omx_buffer_pool_parent_class)->release_buffer
+        (bpool, buf);
   }
   g_ptr_array_set_size (pool->buffers, 0);
 
@@ -480,7 +484,7 @@ gst_omx_buffer_pool_alloc_buffer (GstBufferPool * bpool,
       OMX_ERRORTYPE eError = OMX_ErrorUndefined;
 
       eError = OMX_GetExtensionIndex (self->dec->handle,
-         (OMX_STRING) NVX_INDEX_CONFIG_VIDEOPLANESINFO, &eIndex);
+          (OMX_STRING) NVX_INDEX_CONFIG_VIDEOPLANESINFO, &eIndex);
 
       if (eError == OMX_ErrorNone) {
         NVX_CONFIG_VIDEOPLANESINFO oInfo;
@@ -769,6 +773,17 @@ static OMX_ERRORTYPE gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec *
 static OMX_ERRORTYPE gst_omx_video_dec_deallocate_output_buffers (GstOMXVideoDec
     * self);
 
+#ifdef USE_OMX_TARGET_TEGRA
+static OMX_ERRORTYPE
+gst_omx_enable_video_dec_output_metadata (GstOMXVideoDec * self);
+
+static OMX_ERRORTYPE
+gst_omx_video_dec_set_cpu_buf (GstOMXVideoDec * self);
+
+static OMX_ERRORTYPE
+gst_omx_video_dec_set_deinterlace_method (GstOMXVideoDec * self);
+#endif
+
 enum
 {
   PROP_0,
@@ -776,7 +791,9 @@ enum
   PROP_USE_OMXDEC_RES,
   PROP_USE_FULL_FRAME,
   PROP_DISABLE_DPB,
-  PROP_SKIP_FRAME
+  PROP_SKIP_FRAME,
+  PROP_NUM_OUTPUT_BUFFERS,
+  PROP_ENABLE_ERROR_CHECK
 #endif
 };
 
@@ -810,6 +827,12 @@ gst_omx_video_dec_set_property (GObject * object,
     case PROP_SKIP_FRAME:
       self->skip_frames = g_value_get_enum (value);
       break;
+    case PROP_NUM_OUTPUT_BUFFERS:
+      self->output_buffers = g_value_get_uint (value);
+      break;
+    case PROP_ENABLE_ERROR_CHECK:
+      self->enable_error_check = g_value_get_boolean (value);
+      break;
 #endif
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -836,6 +859,12 @@ gst_omx_video_dec_get_property (GObject * object,
       break;
     case PROP_SKIP_FRAME:
       g_value_set_enum (value, self->skip_frames);
+      break;
+    case PROP_NUM_OUTPUT_BUFFERS:
+      g_value_set_uint (value, self->output_buffers);
+      break;
+    case PROP_ENABLE_ERROR_CHECK:
+      g_value_set_boolean (value, self->enable_error_check);
       break;
 #endif
     default:
@@ -883,6 +912,19 @@ gst_omx_video_dec_class_init (GstOMXVideoDecClass * klass)
           DEFAULT_SKIP_FRAME_TYPE,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
+
+  g_object_class_install_property (gobject_class, PROP_NUM_OUTPUT_BUFFERS,
+      g_param_spec_uint ("output-buffers",
+          "output-buffers",
+          "The number of OMX decoder output buffers (0 = auto)",
+          0, 16, DEFAULT_OUTPUT_BUFFER,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+  g_object_class_install_property (gobject_class, PROP_ENABLE_ERROR_CHECK,
+      g_param_spec_boolean ("enable-error-check",
+          "Enable on the fly decode error check",
+          "Set to enable on the fly decode error check",
+          FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 #endif
 
   element_class->change_state =
@@ -902,7 +944,13 @@ gst_omx_video_dec_class_init (GstOMXVideoDecClass * klass)
       GST_DEBUG_FUNCPTR (gst_omx_video_dec_decide_allocation);
 
   klass->cdata.type = GST_OMX_COMPONENT_TYPE_FILTER;
-  klass->cdata.default_src_template_caps = "video/x-raw, "
+  klass->cdata.default_src_template_caps =
+#if defined (USE_OMX_TARGET_TEGRA)
+    "video/x-raw(memory:NVMM), "
+      "width = " GST_VIDEO_SIZE_RANGE ", "
+      "height = " GST_VIDEO_SIZE_RANGE ", " "framerate = " GST_VIDEO_FPS_RANGE ";"
+#endif
+    "video/x-raw, "
       "width = " GST_VIDEO_SIZE_RANGE ", "
       "height = " GST_VIDEO_SIZE_RANGE ", " "framerate = " GST_VIDEO_FPS_RANGE;
 }
@@ -932,6 +980,11 @@ gst_omx_video_dec_init (GstOMXVideoDec * self)
 #ifdef USE_OMX_TARGET_TEGRA
   self->use_omxdec_res = DEFAULT_USE_OMXDEC_RES;
   self->full_frame_data = FALSE;
+  self->output_buffers = DEFAULT_OUTPUT_BUFFER;
+  self->enable_error_check = FALSE;
+  self->enable_frame_type_reporting = FALSE;
+  self->cpu_dec_buf = FALSE;
+
 #endif
 
   g_mutex_init (&self->drain_lock);
@@ -951,6 +1004,8 @@ gst_omx_video_dec_open (GstVideoDecoder * decoder)
       gst_omx_component_new (GST_OBJECT_CAST (self), klass->cdata.core_name,
       klass->cdata.component_name, klass->cdata.component_role,
       klass->cdata.hacks);
+
+  gst_omx_video_dec_set_deinterlace_method (self);
   self->started = FALSE;
 
   if (!self->dec)
@@ -996,10 +1051,17 @@ gst_omx_video_dec_open (GstVideoDecoder * decoder)
 #ifdef USE_OMX_TARGET_TEGRA
   {
     OMX_PARAM_PORTDEFINITIONTYPE port_def;
-
+    OMX_ERRORTYPE err = OMX_ErrorNone;
     gst_omx_port_get_port_definition (self->dec_in_port, &port_def);
     port_def.format.video.nFrameWidth = port_def.format.video.nFrameHeight = 0;
     gst_omx_port_update_port_definition (self->dec_in_port, &port_def);
+    if (self->enable_error_check || self->enable_frame_type_reporting) {
+      err = gst_omx_enable_video_dec_output_metadata (self);
+      if (err != OMX_ErrorNone) {
+        self->enable_error_check = FALSE;
+        self->enable_frame_type_reporting = FALSE;
+      }
+    }
   }
 #endif
 
@@ -1092,6 +1154,7 @@ gst_omx_video_dec_shutdown (GstOMXVideoDec * self)
       gst_omx_component_set_state (self->dec, OMX_StateIdle);
       gst_omx_component_get_state (self->dec, 5 * GST_SECOND);
     }
+    gst_omx_port_wait_buffers_released (self->dec_out_port, 5 * GST_SECOND);
     gst_omx_component_set_state (self->dec, OMX_StateLoaded);
     gst_omx_port_deallocate_buffers (self->dec_in_port);
     gst_omx_video_dec_deallocate_output_buffers (self);
@@ -1185,9 +1248,6 @@ gst_omx_video_dec_change_state (GstElement * element, GstStateChange transition)
       break;
   }
 
-  if (ret == GST_STATE_CHANGE_FAILURE)
-    return ret;
-
   ret =
       GST_ELEMENT_CLASS (gst_omx_video_dec_parent_class)->change_state
       (element, transition);
@@ -1244,7 +1304,7 @@ _find_nearest_frame (GstOMXVideoDec * self, GstOMXBuffer * buf)
 
     timestamp = id->timestamp;
 
-    if (timestamp > buf->omx_buf->nTimeStamp)
+    if (timestamp > (guint64)buf->omx_buf->nTimeStamp)
       diff = timestamp - buf->omx_buf->nTimeStamp;
     else
       diff = buf->omx_buf->nTimeStamp - timestamp;
@@ -1319,8 +1379,8 @@ gst_omx_video_dec_fill_buffer (GstOMXVideoDec * self,
   gboolean ret = FALSE;
   GstVideoFrame frame;
 
-  if (vinfo->width != port_def->format.video.nFrameWidth ||
-      vinfo->height != port_def->format.video.nFrameHeight) {
+  if (vinfo->width != (gint)port_def->format.video.nFrameWidth ||
+      vinfo->height != (gint)port_def->format.video.nFrameHeight) {
     GST_ERROR_OBJECT (self, "Resolution do not match: port=%ux%u vinfo=%dx%d",
         (guint) port_def->format.video.nFrameWidth,
         (guint) port_def->format.video.nFrameHeight,
@@ -1333,9 +1393,11 @@ gst_omx_video_dec_fill_buffer (GstOMXVideoDec * self,
     GstMapInfo map = GST_MAP_INFO_INIT;
 
     gst_buffer_map (outbuf, &map, GST_MAP_WRITE);
-    memcpy (map.data,
-        inbuf->omx_buf->pBuffer + inbuf->omx_buf->nOffset,
-        inbuf->omx_buf->nFilledLen);
+    if (map.data) {
+      memcpy (map.data,
+          inbuf->omx_buf->pBuffer + inbuf->omx_buf->nOffset,
+          inbuf->omx_buf->nFilledLen);
+    }
     gst_buffer_unmap (outbuf, &map);
     ret = TRUE;
     goto done;
@@ -1681,7 +1743,7 @@ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
     GList *buffers = NULL;
     GList *pBuffers = NULL;
     GList *l;
-    gint i;
+    guint i;
     GstBufferPoolAcquireParams params = { 0, };
     GstMapInfo map = GST_MAP_INFO_INIT;
     GList *images = NULL;
@@ -1870,8 +1932,15 @@ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
           min);
       min = port->port_def.nBufferCountMin;
 
-      if (!was_enabled)
-        gst_omx_port_set_enabled (port, FALSE);
+      if (!was_enabled) {
+        err = gst_omx_port_set_enabled (port, FALSE);
+        if (err != OMX_ErrorNone) {
+          GST_INFO_OBJECT (self,
+              "Failed to disable port: %s (0x%08x)",
+              gst_omx_error_to_string (err), err);
+          goto done;
+        }
+      }
 
       if (min != port->port_def.nBufferCountActual) {
         err = gst_omx_port_update_port_definition (port, NULL);
@@ -1977,8 +2046,8 @@ gst_omx_video_dec_deallocate_output_buffers (GstOMXVideoDec * self)
   }
 #if defined (USE_OMX_TARGET_RPI) && defined (HAVE_GST_EGL)
   err =
-      gst_omx_port_deallocate_buffers (self->
-      eglimage ? self->egl_out_port : self->dec_out_port);
+      gst_omx_port_deallocate_buffers (self->eglimage ? self->
+      egl_out_port : self->dec_out_port);
 #else
   err = gst_omx_port_deallocate_buffers (self->dec_out_port);
 #endif
@@ -1998,30 +2067,29 @@ gst_omx_video_dec_negotiate_nv_caps (GstOMXVideoDec * self,
 
   if (peer) {
     GstCaps *icaps;
-    GstCapsFeatures *ift;
+    int n = 0, cnt = 0;
 
-    icaps = gst_video_info_to_caps (&state->info);
-    icaps = gst_caps_make_writable (icaps);
+    icaps = gst_pad_query_caps (peer, NULL);
+    cnt = gst_caps_get_size (icaps);
 
-    ift = gst_caps_features_new ("memory:EGLImage");
-    gst_caps_set_features (icaps, 0, ift);
+    for (n = 0; n < cnt; n++) {
+      GstCapsFeatures *feature;
+      feature = gst_caps_get_features (icaps, n);
 
-    if (gst_pad_query_accept_caps (peer, icaps)) {
-      gst_caps_unref (icaps);
-      gst_object_unref (peer);
-      return BUF_EGL;
-    } else {
-      gst_caps_features_add (ift, "memory:NVMM");
-      gst_caps_features_remove (ift, "memory:EGLImage");
+      if (gst_caps_features_contains (feature, "memory:EGLImage")) {
+        gst_caps_unref (icaps);
+        gst_object_unref (peer);
+        GST_DEBUG_OBJECT (self, "Setting decoder to send out EGLImage");
+        return BUF_EGL;
+      } else if (gst_caps_features_contains (feature, "memory:NVMM")) {
 
-      if (gst_pad_query_accept_caps (peer, icaps)) {
         gst_caps_unref (icaps);
         gst_object_unref (peer);
         if (!gst_omx_port_is_enabled (self->dec_out_port)) {
           NVX_PARAM_USENVBUFFER param;
           OMX_INDEXTYPE eIndex;
 
-          GST_DEBUG_OBJECT (self, "Setting decoder to use Nvmm buffer");
+          GST_DEBUG_OBJECT (self, "Setting decoder to send out NVMM buffer");
 
           err = gst_omx_component_get_index (self->dec,
               (char *) NVX_INDEX_CONFIG_USENVBUFFER, &eIndex);
@@ -2062,6 +2130,7 @@ gst_omx_video_dec_reconfigure_output_port (GstOMXVideoDec * self)
   GstVideoCodecState *state;
   OMX_PARAM_PORTDEFINITIONTYPE port_def;
   GstVideoFormat format;
+  GstCapsFeatures *features;
 
 #if defined (USE_OMX_TARGET_TEGRA) && defined (HAVE_GST_EGL)
   NvBufType nv_buf = BUF_NB;
@@ -2088,6 +2157,7 @@ gst_omx_video_dec_reconfigure_output_port (GstOMXVideoDec * self)
       state = gst_video_decoder_set_output_state (GST_VIDEO_DECODER (self),
           GST_VIDEO_FORMAT_RGBA, port_def.format.video.nFrameWidth,
           port_def.format.video.nFrameHeight, self->input_state);
+
 
       if (!gst_video_decoder_negotiate (GST_VIDEO_DECODER (self))) {
         gst_video_codec_state_unref (state);
@@ -2250,6 +2320,11 @@ gst_omx_video_dec_reconfigure_output_port (GstOMXVideoDec * self)
           port_def.format.video.eColorFormat);
       format = GST_VIDEO_FORMAT_NV12;
       break;
+    case OMX_COLOR_Format10bitYUV420SemiPlanar:
+      GST_DEBUG_OBJECT (self, "Output is I420 10LE(%d)",
+          port_def.format.video.eColorFormat);
+      format = GST_VIDEO_FORMAT_I420_10LE;
+      break;
     default:
       GST_ERROR_OBJECT (self, "Unsupported color format: %d",
           port_def.format.video.eColorFormat);
@@ -2266,7 +2341,7 @@ gst_omx_video_dec_reconfigure_output_port (GstOMXVideoDec * self)
     OMX_U32 frame_size;
 
     eError = OMX_GetExtensionIndex (self->dec->handle,
-       (OMX_STRING) NVX_INDEX_CONFIG_VIDEOPLANESINFO, &eIndex);
+        (OMX_STRING) NVX_INDEX_CONFIG_VIDEOPLANESINFO, &eIndex);
 
     if (eError == OMX_ErrorNone) {
       NVX_CONFIG_VIDEOPLANESINFO oInfo;
@@ -2285,6 +2360,7 @@ gst_omx_video_dec_reconfigure_output_port (GstOMXVideoDec * self)
             iport_def.format.video.nFrameHeight) {
           switch (format) {
             case GST_VIDEO_FORMAT_NV12:
+            case GST_VIDEO_FORMAT_I420_10LE:
               oInfo.nAlign[0][0] =
                   GST_ROUND_UP_4 (iport_def.format.video.nFrameWidth);
               oInfo.nAlign[0][1] =
@@ -2296,6 +2372,8 @@ gst_omx_video_dec_reconfigure_output_port (GstOMXVideoDec * self)
               frame_size =
                   oInfo.nAlign[0][0] * oInfo.nAlign[0][1] +
                   oInfo.nAlign[1][0] * oInfo.nAlign[1][1];
+              if (format == GST_VIDEO_FORMAT_I420_10LE)
+                  frame_size = frame_size << 1;
               break;
             default:
               eError = OMX_ErrorUnsupportedSetting;
@@ -2331,6 +2409,25 @@ gst_omx_video_dec_reconfigure_output_port (GstOMXVideoDec * self)
       format, port_def.format.video.nFrameWidth,
       port_def.format.video.nFrameHeight, self->input_state);
 
+#if defined (USE_OMX_TARGET_TEGRA)
+  {
+    state->caps = gst_video_info_to_caps (&state->info);
+    features = gst_caps_features_new ("memory:NVMM", NULL);
+    gst_caps_set_features (state->caps, 0, features);
+    if (!gst_video_decoder_negotiate (GST_VIDEO_DECODER (self))) {
+      GST_DEBUG_OBJECT (self, "Failed to negotiate with NVMM caps, trying RAW");
+      gst_caps_unref (state->caps);
+      state->caps = NULL;
+    }
+    nv_buf = gst_omx_video_dec_negotiate_nv_caps (self, state);
+    if (nv_buf != BUF_NVMM) {
+      GST_DEBUG_OBJECT (self, "Downstream element does not support NVMM explicitly, try RAW");
+      gst_caps_unref (state->caps);
+      state->caps = NULL;
+    }
+  }
+#endif
+
   if (!gst_video_decoder_negotiate (GST_VIDEO_DECODER (self))) {
     gst_video_codec_state_unref (state);
     GST_ERROR_OBJECT (self, "Failed to negotiate");
@@ -2352,6 +2449,13 @@ gst_omx_video_dec_reconfigure_output_port (GstOMXVideoDec * self)
         self->eglimage = FALSE;
       }
     }
+
+    if (nv_buf == BUF_NB) {
+        self->cpu_dec_buf = TRUE;
+    } else {
+        self->cpu_dec_buf = FALSE;
+    }
+    gst_omx_video_dec_set_cpu_buf (self);
   }
 #endif
 
@@ -2387,8 +2491,10 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
   GstVideoCodecFrame *frame;
   GstFlowReturn flow_ret = GST_FLOW_OK;
   GstOMXAcquireBufferReturn acq_return;
-  GstClockTimeDiff deadline;
   OMX_ERRORTYPE err;
+#ifdef HAVE_IVA_META
+  IvaMeta *meta = NULL;
+#endif
 
 #if defined (USE_OMX_TARGET_RPI) && defined (HAVE_GST_EGL)
   port = self->eglimage ? self->egl_out_port : self->dec_out_port;
@@ -2418,7 +2524,7 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
         && gst_omx_port_is_enabled (port)) {
       gst_pad_push_event (GST_VIDEO_DECODER_SRC_PAD (self),
           gst_event_new_custom (GST_EVENT_CUSTOM_DOWNSTREAM,
-              gst_structure_new_empty("ReleaseLastBuffer")));
+              gst_structure_new_empty ("ReleaseLastBuffer")));
 
       err = gst_omx_port_set_enabled (port, FALSE);
       if (err != OMX_ErrorNone)
@@ -2517,18 +2623,92 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
   GST_DEBUG_OBJECT (self, "Handling buffer: 0x%08x %" G_GUINT64_FORMAT,
       (guint) buf->omx_buf->nFlags, (guint64) buf->omx_buf->nTimeStamp);
 
+#ifdef USE_OMX_TARGET_TEGRA
+  {
+    GstOMXVideoDecClass *klass = GST_OMX_VIDEO_DEC_GET_CLASS (self);
+
+    if (self->enable_error_check) {
+      OMX_OTHER_EXTRADATATYPE *pExtraHeader =
+          gst_omx_buffer_get_extradata (buf, NVX_ExtraDataVideoDecOutput);
+
+      if (pExtraHeader
+          && (pExtraHeader->nDataSize ==
+              sizeof (NVX_VIDEO_DEC_OUTPUT_EXTRA_DATA))) {
+        NVX_VIDEO_DEC_OUTPUT_EXTRA_DATA *pNvxVideoDecOutputExtraData =
+            (NVX_VIDEO_DEC_OUTPUT_EXTRA_DATA *) (&pExtraHeader->data);
+
+        if (pNvxVideoDecOutputExtraData->nDecodeParamsFlag &
+            NVX_VIDEO_DEC_OUTPUT_PARAMS_FLAG_FRAME_DEC_ERR_REPORT) {
+          GstMessage *status_msg;
+          GstStructure *msg_struct;
+          gchar *temp = NULL;
+          gchar *str = g_strdup ("");
+
+          if (pNvxVideoDecOutputExtraData->sDecErrReport.nDecodeError &
+              VIDEO_DEC_DECODED_ERROR_FATAL) {
+            temp = g_strconcat (str, "Fatal Error", NULL);
+            g_free (str);
+            str = temp;
+          }
+          if (pNvxVideoDecOutputExtraData->sDecErrReport.nDecodeError &
+              VIDEO_DEC_DECODED_ERROR_MB_SYNTAX) {
+            temp =
+                g_strconcat (str, (temp) ? ", " : "", "MB Level Syntax Error",
+                NULL);
+            g_free (str);
+            str = temp;
+          }
+          if (pNvxVideoDecOutputExtraData->sDecErrReport.nDecodeError &
+              VIDEO_DEC_DECODED_ERROR_MISSING_SLICE) {
+            temp =
+                g_strconcat (str, (temp) ? ", " : "", "Missing Slice(s)", NULL);
+            g_free (str);
+            str = temp;
+          }
+          if (pNvxVideoDecOutputExtraData->sDecErrReport.nDecodeError &
+              VIDEO_DEC_DECODED_ERROR_PREV_FRAME_LOST) {
+            temp =
+                g_strconcat (str, (temp) ? ", " : "", "Previous Frame Lost(s)",
+                NULL);
+            g_free (str);
+            str = temp;
+          }
+          if (pNvxVideoDecOutputExtraData->sDecErrReport.nDecodeError ==
+              VIDEO_DEC_DECODED_ERROR_NONE) {
+            g_free (str);
+            str = g_strdup ("No Error");
+          }
+
+          msg_struct = gst_structure_new ("decoder-status",
+              "DecodeError", G_TYPE_UINT,
+              pNvxVideoDecOutputExtraData->sDecErrReport.nDecodeError,
+              "DecodeErrorString", G_TYPE_STRING, str,
+              "DecodedMBs", G_TYPE_UINT,
+              pNvxVideoDecOutputExtraData->sDecErrReport.nDecodedMBs,
+              "ConcealedMBs", G_TYPE_UINT,
+              pNvxVideoDecOutputExtraData->sDecErrReport.nConcealedMBs,
+              "FrameDecodeTime", G_TYPE_UINT,
+              pNvxVideoDecOutputExtraData->sDecErrReport.nFrameDecodeTime,
+              NULL);
+
+          status_msg =
+              gst_message_new_custom (GST_MESSAGE_ELEMENT, GST_OBJECT (self),
+              msg_struct);
+          gst_element_post_message (GST_ELEMENT (self), status_msg);
+        }
+      }
+    }
+
+    if (klass->video_dec_loop) {
+      klass->video_dec_loop (buf);
+    }
+  }
+#endif
+
   GST_VIDEO_DECODER_STREAM_LOCK (self);
   frame = _find_nearest_frame (self, buf);
 
-  if (frame
-      && (deadline = gst_video_decoder_get_max_decode_time
-          (GST_VIDEO_DECODER (self), frame)) < 0) {
-    GST_WARNING_OBJECT (self,
-        "Frame is too late, dropping (deadline %" GST_TIME_FORMAT ")",
-        GST_TIME_ARGS (-deadline));
-    flow_ret = gst_video_decoder_drop_frame (GST_VIDEO_DECODER (self), frame);
-    frame = NULL;
-  } else if (!frame && (buf->omx_buf->nFilledLen > 0 || buf->eglimage)) {
+  if (!frame && (buf->omx_buf->nFilledLen > 0 || buf->eglimage)) {
     GstBuffer *outbuf;
 
     /* This sometimes happens at EOS or if the input is not properly framed,
@@ -2570,6 +2750,11 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
       }
     }
 
+#ifdef HAVE_IVA_META
+    meta = gst_buffer_add_iva_meta(outbuf, &(buf->Video_Meta.VideoDecMeta));
+    meta->meta_type = NV_BBOX_DECODE_INFO;
+#endif
+
     flow_ret = gst_pad_push (GST_VIDEO_DECODER_SRC_PAD (self), outbuf);
   } else if (buf->omx_buf->nFilledLen > 0 || buf->eglimage) {
     if (self->out_port_pool) {
@@ -2596,6 +2781,11 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
         gst_omx_port_release_buffer (port, buf);
         goto invalid_buffer;
       }
+
+#ifdef HAVE_IVA_META
+      meta = gst_buffer_add_iva_meta(frame->output_buffer, &(buf->Video_Meta.VideoDecMeta));
+      meta->meta_type = NV_BBOX_DECODE_INFO;
+#endif
       flow_ret =
           gst_video_decoder_finish_frame (GST_VIDEO_DECODER (self), frame);
       frame = NULL;
@@ -2616,6 +2806,12 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
           gst_omx_port_release_buffer (port, buf);
           goto invalid_buffer;
         }
+
+#ifdef HAVE_IVA_META
+        meta = gst_buffer_add_iva_meta(frame->output_buffer, &(buf->Video_Meta.VideoDecMeta));
+        meta->meta_type = NV_BBOX_DECODE_INFO;
+#endif
+
         flow_ret =
             gst_video_decoder_finish_frame (GST_VIDEO_DECODER (self), frame);
         frame = NULL;
@@ -2873,7 +3069,7 @@ gst_omx_video_dec_get_supported_colorformats (GstOMXVideoDec * self)
      * returns the same value regardless of nIndex and
      * never returns OMX_ErrorNoMore
      */
-    if (old_index == param.nIndex)
+    if (old_index == (gint)param.nIndex)
       break;
 
     if (err == OMX_ErrorNone || err == OMX_ErrorNoMore) {
@@ -2919,7 +3115,9 @@ gst_omx_video_dec_negotiate (GstOMXVideoDec * self)
   GstCaps *templ_caps, *intersection;
   GstVideoFormat format;
   GstStructure *s;
+  gint width, height;
   const gchar *format_str;
+  OMX_PARAM_PORTDEFINITIONTYPE port_def;
 
   GST_DEBUG_OBJECT (self, "Trying to negotiate a video format with downstream");
 
@@ -2958,9 +3156,12 @@ gst_omx_video_dec_negotiate (GstOMXVideoDec * self)
         (GDestroyNotify) video_negotiation_map_free);
     return FALSE;
   }
-
   intersection = gst_caps_truncate (intersection);
   intersection = gst_caps_fixate (intersection);
+
+  gst_omx_port_get_port_definition (self->dec_in_port, &port_def);
+  width = port_def.format.video.nFrameWidth;
+  height = port_def.format.video.nFrameHeight;
 
   s = gst_caps_get_structure (intersection, 0);
   format_str = gst_structure_get_string (s, "format");
@@ -3001,6 +3202,8 @@ gst_omx_video_dec_negotiate (GstOMXVideoDec * self)
     GST_ERROR_OBJECT (self, "Failed to set video port format: %s (0x%08x)",
         gst_omx_error_to_string (err), err);
   }
+  gst_video_decoder_set_output_state (GST_VIDEO_DECODER (self),
+              format, width, height, self->input_state);
 
   return (err == OMX_ErrorNone);
 }
@@ -3026,12 +3229,12 @@ gst_omx_video_dec_set_format (GstVideoDecoder * decoder,
   /* Check if the caps change is a real format change or if only irrelevant
    * parts of the caps have changed or nothing at all.
    */
-  is_format_change |= port_def.format.video.nFrameWidth != info->width;
-  is_format_change |= port_def.format.video.nFrameHeight != info->height;
+  is_format_change |= port_def.format.video.nFrameWidth != (guint)info->width;
+  is_format_change |= port_def.format.video.nFrameHeight != (guint)info->height;
   is_format_change |= (port_def.format.video.xFramerate == 0
       && info->fps_n != 0)
       || (port_def.format.video.xFramerate !=
-      (info->fps_n << 16) / (info->fps_d));
+      (guint)(info->fps_n << 16) / (info->fps_d));
   is_format_change |= (self->codec_data != state->codec_data);
   if (klass->is_format_change)
     is_format_change |=
@@ -3208,6 +3411,7 @@ gst_omx_video_dec_set_format (GstVideoDecoder * decoder,
             1 * GST_SECOND) != OMX_ErrorNone)
       return FALSE;
 
+
     if (gst_omx_component_set_state (self->dec, OMX_StateIdle) != OMX_ErrorNone)
       return FALSE;
 
@@ -3321,7 +3525,6 @@ gst_omx_video_dec_handle_frame (GstVideoDecoder * decoder,
     gst_video_codec_frame_unref (frame);
     return GST_FLOW_EOS;
   }
-
 #ifndef USE_OMX_TARGET_TEGRA
   if (!self->started && !GST_VIDEO_CODEC_FRAME_IS_SYNC_POINT (frame)) {
     gst_video_decoder_drop_frame (GST_VIDEO_DECODER (self), frame);
@@ -3484,6 +3687,9 @@ gst_omx_video_dec_handle_frame (GstVideoDecoder * decoder,
       self->last_upstream_ts = timestamp;
     } else if (duration != GST_CLOCK_TIME_NONE) {
       buf->omx_buf->nTimeStamp = self->last_upstream_ts + duration;
+      buf->omx_buf->nTimeStamp =
+          gst_util_uint64_scale (buf->omx_buf->nTimeStamp, OMX_TICKS_PER_SECOND,
+          GST_SECOND);
     } else {
       buf->omx_buf->nTimeStamp = 0;
     }
@@ -3738,6 +3944,8 @@ gst_omx_video_dec_decide_allocation (GstVideoDecoder * bdec, GstQuery * query)
   gst_buffer_pool_config_get_params (config, &caps, &size, &min, &max);
 
   min = MAX (MAX (min, port->port_def.nBufferCountMin), 4);
+  if (self->output_buffers > min)
+    min = self->output_buffers;
 
   if (min != port->port_def.nBufferCountActual) {
     err = gst_omx_port_update_port_definition (port, NULL);
@@ -3745,16 +3953,16 @@ gst_omx_video_dec_decide_allocation (GstVideoDecoder * bdec, GstQuery * query)
       port->port_def.nBufferCountActual = min;
       err = gst_omx_port_update_port_definition (port, &port->port_def);
     }
-    if (err == OMX_ErrorNone) {
-      gst_buffer_pool_config_set_params (config, caps, size, min, max);
-      if (!gst_buffer_pool_set_config (pool, config)) {
-        GST_INFO_OBJECT (self, "Failed to set config on internal pool");
-      }
-    } else {
-      gst_structure_free (config);
-    }
-  } else {
-    gst_structure_free (config);
+  }
+
+  if (max < min)
+    max = min;
+
+  size += port->extra_data_size;
+
+  gst_buffer_pool_config_set_params (config, caps, size, min, max);
+  if (!gst_buffer_pool_set_config (pool, config)) {
+    GST_INFO_OBJECT (self, "Failed to set config on internal pool");
   }
 #endif
 
@@ -3767,4 +3975,86 @@ gst_omx_video_dec_decide_allocation (GstVideoDecoder * bdec, GstQuery * query)
   gst_object_unref (pool);
 
   return TRUE;
+}
+
+#ifdef USE_OMX_TARGET_TEGRA
+static OMX_ERRORTYPE
+gst_omx_enable_video_dec_output_metadata (GstOMXVideoDec * self)
+{
+  OMX_INDEXTYPE eIndex;
+  OMX_ERRORTYPE eError = OMX_ErrorNone;
+  OMX_CONFIG_BOOLEANTYPE enable_error_check;
+
+  eError = gst_omx_component_get_index (self->dec,
+      (char *) NVX_INDEX_PARAM_VIDEO_DEC_ERROR_STATS_REPORTING, &eIndex);
+
+  if (eError == OMX_ErrorNone) {
+    GST_OMX_INIT_STRUCT (&enable_error_check);
+    enable_error_check.bEnabled = OMX_TRUE;
+
+    eError = gst_omx_component_set_parameter (self->dec,
+        eIndex, &enable_error_check);
+
+    if (eError != OMX_ErrorNone) {
+      GST_DEBUG_OBJECT (self, "Couldnt use the Vendor Extension %s \n",
+          (char *) NVX_INDEX_PARAM_VIDEO_DEC_ERROR_STATS_REPORTING);
+    } else {
+      self->dec_out_port->extra_data_size += sizeof (OMX_OTHER_EXTRADATATYPE)
+          + sizeof (NVX_VIDEO_DEC_OUTPUT_EXTRA_DATA);
+    }
+  }
+
+  return eError;
+}
+
+static OMX_ERRORTYPE
+gst_omx_video_dec_set_cpu_buf (GstOMXVideoDec * self)
+{
+  OMX_INDEXTYPE eIndex;
+  OMX_ERRORTYPE eError = OMX_ErrorNone;
+  OMX_CONFIG_BOOLEANTYPE cpu_dec_buf;
+
+  eError = gst_omx_component_get_index (self->dec,
+      (char *) NVX_INDEX_PARAM_VIDEO_DEC_CPU_BUF, &eIndex);
+
+  if (eError == OMX_ErrorNone) {
+    GST_OMX_INIT_STRUCT (&cpu_dec_buf);
+    cpu_dec_buf.bEnabled = self->cpu_dec_buf;
+
+    eError = gst_omx_component_set_parameter (self->dec,
+        eIndex, &cpu_dec_buf);
+
+    if (eError != OMX_ErrorNone) {
+      GST_DEBUG_OBJECT (self, "Couldnt use the Vendor Extension %s \n",
+          (char *) NVX_INDEX_PARAM_VIDEO_DEC_CPU_BUF);
+    }
+  }
+  return eError;
+}
+
+#endif
+
+static OMX_ERRORTYPE
+gst_omx_video_dec_set_deinterlace_method (GstOMXVideoDec * self)
+{
+  OMX_INDEXTYPE eIndex;
+  OMX_ERRORTYPE eError = OMX_ErrorNone;
+  NVX_PARAM_DEINTERLACE video_dec_frame;
+
+  eError = gst_omx_component_get_index (self->dec,
+      (char *) NVX_INDEX_PARAM_DEINTERLACING, &eIndex);
+
+  if (eError == OMX_ErrorNone) {
+    GST_OMX_INIT_STRUCT (&video_dec_frame);
+    video_dec_frame.DeinterlaceMethod = OMX_DeintMethod_Advanced1AtFrameRate;
+
+    eError = gst_omx_component_set_parameter (self->dec,
+        eIndex, &video_dec_frame);
+
+    if (eError != OMX_ErrorNone) {
+      GST_DEBUG_OBJECT (self, "Couldnt use the Vendor Extension %s \n",
+          (char *) NVX_INDEX_PARAM_DEINTERLACING);
+    }
+  }
+  return eError;
 }

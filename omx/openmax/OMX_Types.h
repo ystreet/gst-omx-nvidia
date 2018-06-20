@@ -31,6 +31,7 @@
 #ifndef OMX_Types_h
 #define OMX_Types_h
 
+#include <stdint.h>
 #ifdef __cplusplus
 extern "C" {
 #endif /* __cplusplus */
@@ -38,7 +39,7 @@ extern "C" {
 /** The OMX_API and OMX_APIENTRY are platform specific definitions used
  *  to declare OMX function prototypes.  They are modified to meet the
  *  requirements for a particular platform */
-#ifdef __SYMBIAN32__   
+#ifdef __SYMBIAN32__
 #   ifdef __OMX_EXPORTS
 #       define OMX_API __declspec(dllexport)
 #   else
@@ -142,14 +143,14 @@ typedef unsigned short OMX_U16;
 typedef signed short OMX_S16;
 
 /** OMX_U32 is a 32 bit unsigned quantity that is 32 bit word aligned */
-typedef unsigned long OMX_U32;
+typedef uint32_t OMX_U32;
 
 /** OMX_S32 is a 32 bit signed quantity that is 32 bit word aligned */
-typedef signed long OMX_S32;
+typedef int32_t OMX_S32;
 
 
 /* Users with compilers that cannot accept the "long long" designation should
-   define the OMX_SKIP64BIT macro.  It should be noted that this may cause 
+   define the OMX_SKIP64BIT macro.  It should be noted that this may cause
    some components to fail to compile if the component was written to require
    64 bit integral types.  However, these components would NOT compile anyway
    since the compiler does not support the way the component was written.

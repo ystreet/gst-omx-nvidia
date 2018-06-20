@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 The Khronos Group Inc. 
+ * Copyright (c) 2008-2014 The Khronos Group Inc.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -392,6 +392,11 @@ typedef struct OMX_PARAM_COMPONENTROLETYPE {
  */
 #define OMX_BUFFERFLAG_CODECCONFIG 0x00000080
 
+/* Alternate or Golden Frame Flag: This flag is set when the buffer contains a golden or
+ * alternate frame in case of vp8 encoder
+ * @ingroup buf
+ */
+#define OMX_BUFFERFLAG_GOLDENORALTERNATEFRAME 0x00000100
 
 
 /** @ingroup buf */

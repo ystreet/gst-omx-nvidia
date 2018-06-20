@@ -3,7 +3,7 @@
  *   Author: Sebastian Dröge <sebastian.droege@collabora.co.uk>, Collabora Ltd.
  * Copyright (C) 2013, Collabora Ltd.
  *   Author: Sebastian Dröge <sebastian.droege@collabora.co.uk>
- * Copyright (c) 2013-2014, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2013-2016, NVIDIA CORPORATION.  All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -27,30 +27,27 @@
 
 #include <gst/gst.h>
 #include <string.h>
+#include <stdint.h>
 
 #include "gstomx.h"
-#include "gstomxmjpegdec.h"
 #include "gstomxmpeg2videodec.h"
 #include "gstomxmpeg4videodec.h"
 #include "gstomxh264dec.h"
-#include "gstomxh263dec.h"
+#include "gstomxh265dec.h"
 #include "gstomxtheoradec.h"
 #include "gstomxwmvdec.h"
 #include "gstomxmpeg4videoenc.h"
 #include "gstomxh264enc.h"
-#include "gstomxh263enc.h"
-#include "gstomxaacenc.h"
+#include "gstomxh265enc.h"
 #include "gstnvoverlaysink.h"
-#include "gstnvhdmioverlaysink.h"
-#include "gstomxaacdec.h"
-#include "gstomxmpegaudiodec.h"
-#include "gstomxamrnbdec.h"
-#include "gstomxamrwbdec.h"
 
 #ifdef HAVE_VP8
 #include "gstomxvp8dec.h"
 #include "gstomxvp8enc.h"
 #endif
+
+#include "gstomxvp9dec.h"
+#include "gstomxvp9enc.h"
 
 GST_DEBUG_CATEGORY (gstomx_debug);
 #define GST_CAT_DEFAULT gstomx_debug
@@ -413,13 +410,6 @@ gst_omx_component_handle_messages (GstOMXComponent * comp)
   g_mutex_unlock (&comp->messages_lock);
 }
 
-
-void
-gst_omx_handle_messages (GstOMXComponent * comp)
-{
-  gst_omx_component_handle_messages (comp);
-}
-
 /* NOTE: comp->messages_lock will be used */
 static void
 gst_omx_component_send_message (GstOMXComponent * comp, GstOMXMessage * msg)
@@ -569,7 +559,6 @@ EmptyBufferDone (OMX_HANDLETYPE hComponent, OMX_PTR pAppData,
 {
   GstOMXBuffer *buf;
   GstOMXComponent *comp;
-  GstOMXMessage *msg;
 
   buf = pBuffer->pAppPrivate;
   if (!buf) {
@@ -586,17 +575,43 @@ EmptyBufferDone (OMX_HANDLETYPE hComponent, OMX_PTR pAppData,
 
   comp = buf->port->comp;
 
-  msg = g_slice_new (GstOMXMessage);
-  msg->type = GST_OMX_MESSAGE_BUFFER_DONE;
-  msg->content.buffer_done.component = hComponent;
-  msg->content.buffer_done.app_data = pAppData;
-  msg->content.buffer_done.buffer = pBuffer;
-  msg->content.buffer_done.empty = OMX_TRUE;
+#ifdef USE_OMX_TARGET_TEGRA
+  g_mutex_lock (&comp->lock);
+  /* Reset offset and filled length */
+  buf->omx_buf->nOffset = 0;
+  buf->omx_buf->nFilledLen = 0;
+
+  /*Unref buffer, so it can be used again */
+  if (buf->gst_buf)
+    gst_buffer_unref (buf->gst_buf);
+
+  /* Reset all flags, some implementations don't
+   * reset them themselves and the flags are not
+   * valid anymore after the buffer was consumed
+   */
+  buf->omx_buf->nFlags = 0;
+
+  buf->used = FALSE;
+
+  g_queue_push_tail (&buf->port->pending_buffers, buf);
+  g_cond_broadcast (&comp->messages_cond);
+  g_mutex_unlock (&comp->lock);
+#else
+  {
+    GstOMXMessage *msg;
+    msg = g_slice_new (GstOMXMessage);
+    msg->type = GST_OMX_MESSAGE_BUFFER_DONE;
+    msg->content.buffer_done.component = hComponent;
+    msg->content.buffer_done.app_data = pAppData;
+    msg->content.buffer_done.buffer = pBuffer;
+    msg->content.buffer_done.empty = OMX_TRUE;
+
+    gst_omx_component_send_message (comp, msg);
+  }
+#endif
 
   GST_LOG_OBJECT (comp->parent, "%s port %u emptied buffer %p (%p)",
       comp->name, buf->port->index, buf, buf->omx_buf->pBuffer);
-
-  gst_omx_component_send_message (comp, msg);
 
   return OMX_ErrorNone;
 }
@@ -1229,8 +1244,10 @@ gst_omx_port_update_port_definition (GstOMXPort * port,
     err =
         gst_omx_component_set_parameter (comp, OMX_IndexParamPortDefinition,
         port_def);
-  gst_omx_component_get_parameter (comp, OMX_IndexParamPortDefinition,
-      &port->port_def);
+
+  if (err == OMX_ErrorNone)
+    err = gst_omx_component_get_parameter (comp, OMX_IndexParamPortDefinition,
+        &port->port_def);
 
   GST_DEBUG_OBJECT (comp->parent, "Updated %s port %u definition: %s (0x%08x)",
       comp->name, port->index, gst_omx_error_to_string (err), err);
@@ -1373,9 +1390,6 @@ retry:
     ret = GST_OMX_ACQUIRE_BUFFER_OK;
     goto done;
   }
-
-  g_assert_not_reached ();
-  goto retry;
 
 done:
   g_mutex_unlock (&comp->lock);
@@ -1560,13 +1574,16 @@ gst_omx_port_set_flushing (GstOMXPort * port, GstClockTime timeout,
       if (!g_queue_is_empty (&comp->messages)) {
         signalled = TRUE;
       }
-      if (timeout == GST_CLOCK_TIME_NONE) {
-        g_cond_wait (&comp->messages_cond, &comp->messages_lock);
-        signalled = TRUE;
-      } else {
-        signalled =
-            g_cond_wait_until (&comp->messages_cond, &comp->messages_lock,
-            wait_until);
+
+      if (!signalled) {
+        if (timeout == GST_CLOCK_TIME_NONE) {
+          g_cond_wait (&comp->messages_cond, &comp->messages_lock);
+          signalled = TRUE;
+        } else {
+          signalled =
+              g_cond_wait_until (&comp->messages_cond, &comp->messages_lock,
+              wait_until);
+        }
       }
 
       g_mutex_unlock (&comp->messages_lock);
@@ -1638,7 +1655,7 @@ static OMX_ERRORTYPE gst_omx_port_deallocate_buffers_unlocked (GstOMXPort *
 /* NOTE: Must be called while holding comp->lock, uses comp->messages_lock */
 static OMX_ERRORTYPE
 gst_omx_port_allocate_buffers_unlocked (GstOMXPort * port,
-    const GList * buffers, const GList * images, guint n)
+    const GList * buffers, const GList * images, gint n)
 {
   GstOMXComponent *comp;
   OMX_ERRORTYPE err = OMX_ErrorNone;
@@ -1670,7 +1687,7 @@ gst_omx_port_allocate_buffers_unlocked (GstOMXPort * port,
   if (n == -1)
     n = port->port_def.nBufferCountActual;
 
-  g_return_val_if_fail (n == port->port_def.nBufferCountActual,
+  g_return_val_if_fail (n == (gint)port->port_def.nBufferCountActual,
       OMX_ErrorBadParameter);
 
   GST_INFO_OBJECT (comp->parent,
@@ -1683,6 +1700,7 @@ gst_omx_port_allocate_buffers_unlocked (GstOMXPort * port,
   l = (buffers ? buffers : images);
   for (i = 0; i < n; i++) {
     GstOMXBuffer *buf;
+    guint32 buffer_size;
 
     buf = g_slice_new0 (GstOMXBuffer);
     buf->port = port;
@@ -1690,10 +1708,17 @@ gst_omx_port_allocate_buffers_unlocked (GstOMXPort * port,
     buf->settings_cookie = port->settings_cookie;
     g_ptr_array_add (port->buffers, buf);
 
+#ifdef USE_OMX_TARGET_TEGRA
+    buffer_size = port->port_def.nBufferSize + port->extra_data_size;
+#else
+    buffer_size = port->port_def.nBufferSize;
+#endif
+
     if (buffers) {
+
       err =
           OMX_UseBuffer (comp->handle, &buf->omx_buf, port->index, buf,
-          port->port_def.nBufferSize, l->data);
+          buffer_size, l->data);
       buf->eglimage = FALSE;
     } else if (images) {
       err =
@@ -1703,7 +1728,7 @@ gst_omx_port_allocate_buffers_unlocked (GstOMXPort * port,
     } else {
       err =
           OMX_AllocateBuffer (comp->handle, &buf->omx_buf, port->index, buf,
-          port->port_def.nBufferSize);
+          buffer_size);
       buf->eglimage = FALSE;
     }
 
@@ -1757,7 +1782,7 @@ OMX_ERRORTYPE
 gst_omx_port_use_buffers (GstOMXPort * port, const GList * buffers)
 {
   OMX_ERRORTYPE err;
-  guint n;
+  gint n;
 
   g_return_val_if_fail (port != NULL, OMX_ErrorUndefined);
 
@@ -1774,7 +1799,7 @@ OMX_ERRORTYPE
 gst_omx_port_use_eglimages (GstOMXPort * port, const GList * images)
 {
   OMX_ERRORTYPE err;
-  guint n;
+  gint n;
 
   g_return_val_if_fail (port != NULL, OMX_ErrorUndefined);
 
@@ -2115,8 +2140,6 @@ gst_omx_port_populate_unlocked (GstOMXPort * port)
   if (port->port_def.eDir == OMX_DirOutput && port->buffers && !port->tunneled) {
     /* Enqueue all buffers for the component to fill */
     while ((buf = g_queue_pop_head (&port->pending_buffers))) {
-      if (!buf)
-        continue;
 
       g_assert (!buf->used);
 
@@ -2355,20 +2378,40 @@ done:
   return err;
 }
 
+#ifdef USE_OMX_TARGET_TEGRA
+OMX_OTHER_EXTRADATATYPE *
+gst_omx_buffer_get_extradata (GstOMXBuffer *buf, OMX_EXTRADATATYPE type)
+{
+  if (buf->omx_buf->nFlags & OMX_BUFFERFLAG_EXTRADATA) {
+    OMX_OTHER_EXTRADATATYPE *pExtraHeader = (OMX_OTHER_EXTRADATATYPE *)((uintptr_t)(buf->omx_buf->pBuffer +
+          buf->omx_buf->nOffset + buf->omx_buf->nFilledLen + 3)&(~3));
+
+    while (pExtraHeader && pExtraHeader->eType != OMX_ExtraDataNone) {
+
+      if(pExtraHeader->eType == type)
+        return pExtraHeader;
+
+      pExtraHeader = (OMX_OTHER_EXTRADATATYPE *) (((OMX_U8 *) pExtraHeader) +
+          pExtraHeader->nSize);
+    }
+  }
+  return NULL;
+}
+#endif
+
 typedef GType (*GGetTypeFunction) (void);
 
 static const GGetTypeFunction types[] = {
   gst_omx_mpeg2_video_dec_get_type, gst_omx_mpeg4_video_dec_get_type,
-  gst_omx_h264_dec_get_type, gst_omx_h263_dec_get_type,
+  gst_omx_h264_dec_get_type,
   gst_omx_wmv_dec_get_type, gst_omx_mpeg4_video_enc_get_type,
-  gst_omx_h264_enc_get_type, gst_omx_h263_enc_get_type,
-  gst_omx_aac_enc_get_type, gst_omx_mjpeg_dec_get_type,
-  gst_nv_overlay_sink_get_type, gst_nv_hdmi_overlay_sink_get_type,
-  gst_omx_aac_dec_get_type, gst_omx_mpegaudio_dec_get_type,
-  gst_omx_amrnb_dec_get_type, gst_omx_amrwb_dec_get_type
+  gst_omx_h264_enc_get_type,
+  gst_omx_h265_enc_get_type, gst_omx_h265_dec_get_type,
+  gst_nv_overlay_sink_get_type
 #ifdef HAVE_VP8
       , gst_omx_vp8_dec_get_type, gst_omx_vp8_enc_get_type
 #endif
+      , gst_omx_vp9_dec_get_type, gst_omx_vp9_enc_get_type
 #ifdef HAVE_THEORA
       , gst_omx_theora_dec_get_type
 #endif
@@ -2383,9 +2426,7 @@ struct TypeOffest
 static const struct TypeOffest base_types[] = {
   {gst_omx_video_dec_get_type, G_STRUCT_OFFSET (GstOMXVideoDecClass, cdata)},
   {gst_omx_video_enc_get_type, G_STRUCT_OFFSET (GstOMXVideoEncClass, cdata)},
-  {gst_omx_audio_enc_get_type, G_STRUCT_OFFSET (GstOMXAudioEncClass, cdata)},
   {gst_omx_video_sink_get_type, G_STRUCT_OFFSET (GstOmxVideoSinkClass, cdata)},
-  {gst_omx_audio_dec_get_type, G_STRUCT_OFFSET (GstOMXAudioDecClass, cdata)},
 };
 
 static GKeyFile *config = NULL;
@@ -2476,11 +2517,11 @@ gst_omx_error_to_string (OMX_ERRORTYPE err)
     case OMX_ErrorTunnelingUnsupported:
       return "Tunneling unsupported";
     default:
-      if (err >= (guint32) OMX_ErrorKhronosExtensions
-          && err < (guint32) OMX_ErrorVendorStartUnused) {
+      if (err >= (gint32) OMX_ErrorKhronosExtensions
+          && err < (gint32) OMX_ErrorVendorStartUnused) {
         return "Khronos extension error";
-      } else if (err >= (guint32) OMX_ErrorVendorStartUnused
-          && err < (guint32) OMX_ErrorMax) {
+      } else if (err >= (gint32) OMX_ErrorVendorStartUnused
+          && err < (gint32) OMX_ErrorMax) {
         return "Vendor specific error";
       } else {
         return "Unknown error";
@@ -2602,7 +2643,7 @@ _class_init (gpointer g_class, gpointer data)
   GstPadTemplate *templ;
   GstCaps *caps;
   gchar **hacks;
-  int i;
+  unsigned int i;
 
   if (!element_name)
     return;
@@ -2744,7 +2785,7 @@ plugin_init (GstPlugin * plugin)
   gchar *env_config_dir;
   const gchar *user_config_dir;
   const gchar *const *system_config_dirs;
-  gint i, j;
+  guint i, j;
   gsize n_elements;
   static const gchar *config_name[] = { "gstomx.conf", NULL };
   static const gchar *env_config_name[] = { "GST_OMX_CONFIG_DIR", NULL };

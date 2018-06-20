@@ -3,7 +3,7 @@
  *   Author: Sebastian Dröge <sebastian.droege@collabora.co.uk>, Collabora Ltd.
  * Copyright (C) 2013, Collabora Ltd.
  *   Author: Sebastian Dröge <sebastian.droege@collabora.co.uk>
- * Copyright (c) 2012-2014, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2012-2016, NVIDIA CORPORATION.  All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -48,6 +48,7 @@
 
 #include <OMX_Core.h>
 #include <OMX_Component.h>
+#include <OMX_VideoExt.h>
 
 #ifdef USE_OMX_TARGET_TEGRA
 #include "NVOMX_IndexExtensions.h"
@@ -224,6 +225,9 @@ struct _GstOMXPort
   gboolean disabled_pending;    /* was done until it took effect */
   gboolean eos;                 /* TRUE after a buffer with EOS flag was received */
   gboolean reconfigure;         /* TRUE incase port needs to be reconfigured */
+#ifdef USE_OMX_TARGET_TEGRA
+  guint32 extra_data_size;
+#endif
 
   /* Increased whenever the settings of these port change.
    * If settings_cookie != configured_settings_cookie
@@ -267,6 +271,35 @@ struct _GstOMXComponent
   GList *pending_reconfigure_outports;
 };
 
+#ifdef USE_OMX_TARGET_TEGRA
+typedef enum
+{
+  IDR_FRAME = 1,
+  I_FRAME,
+  P_FRAME,
+  B_FRAME,
+} FRAME_TYPE;
+
+
+typedef struct
+{
+  guint32 buffersize;
+  guint32 * mv_data;
+}MVHeader;
+
+
+typedef struct GstOMXVideoDecMeta
+{
+  guint32 dec_frame_type;
+} GstOMXVideoDecMeta;
+
+typedef struct GstOMXVideoEncMeta
+{
+  guint32 enc_frame_type;
+  MVHeader *pMvHdr;
+} GstOMXVideoEncMeta;
+#endif
+
 struct _GstOMXBuffer
 {
   GstOMXPort *port;
@@ -283,6 +316,13 @@ struct _GstOMXBuffer
 
   /* TRUE if this is an EGLImage */
   gboolean eglimage;
+
+#ifdef USE_OMX_TARGET_TEGRA
+  union {
+  GstOMXVideoDecMeta VideoDecMeta;
+  GstOMXVideoEncMeta VideoEncMeta;
+  } Video_Meta;
+#endif
 };
 
 struct _GstOMXClassData
@@ -375,14 +415,15 @@ OMX_ERRORTYPE gst_omx_port_wait_enabled (GstOMXPort * port,
     GstClockTime timeout);
 gboolean gst_omx_port_is_enabled (GstOMXPort * port);
 
-
 void gst_omx_set_default_role (GstOMXClassData * class_data,
     const gchar * default_role);
 
 OMX_ERRORTYPE gst_omx_component_get_index (GstOMXComponent * comp, gpointer str,
     OMX_INDEXTYPE * index);
 
-void gst_omx_handle_messages (GstOMXComponent * comp);
+#ifdef USE_OMX_TARGET_TEGRA
+OMX_OTHER_EXTRADATATYPE * gst_omx_buffer_get_extradata (GstOMXBuffer *buf, OMX_EXTRADATATYPE type);
+#endif
 
 G_END_DECLS
 #endif /* __GST_OMX_H__ */
